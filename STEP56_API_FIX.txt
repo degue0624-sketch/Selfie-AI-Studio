@@ -1,0 +1,8 @@
+Selfie AI Studio v1.5.1 / Step56
+
+API fix:
+- Connection test max_output_tokens: 8 -> 64
+- Improved HTTP 400/403/404/429 error messages
+- Connection-test latency display
+- Existing API key settings remain compatible
+- AI Assistant and AI image-analysis request formats are unchanged

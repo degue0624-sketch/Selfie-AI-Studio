@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Runtime / local user data
+logs/
+temp/
+tmp/
+*.log
+
+# Generated images and heavy artifacts
+outputs/
+generated/
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+
+# Backups / archives
+backups/
+*.zip
+
+# Secrets / API config
+**/ai_api_config.json
+.env
+.env.*
+
+# Local database / mutable studio data
+**/Data/image_reviews.json
+**/Data/prompt_builder_parts.json
+
+# Model files
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+
+# NAS / local-only paths
+local_settings.json

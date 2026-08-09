@@ -1,0 +1,28 @@
+Selfie AI Studio v1.5
+
+Status:
+- v1.5 baseline complete.
+
+Main functions:
+- Project / Character management
+- Prompt Library / Prompt Builder
+- Model / LoRA management
+- Forge generation
+- Single / queued generation
+- Session gallery
+- History / Adopted DB
+- A/B comparison
+- AI Assistant
+- OpenAI API settings and analysis path
+- Image review / AI image analysis
+- Backup / restore
+- Release self-check
+- Git-ready source management
+
+Important:
+- API features require an OpenAI API key.
+- Image generation remains local through Forge.
+- Generated images, model files and API secrets are excluded from Git.
+
+Recommended normal startup:
+- Start_Selfie_AI_Studio.cmd

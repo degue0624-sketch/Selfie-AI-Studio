@@ -1,0 +1,17 @@
+Selfie AI Studio - Git Guide
+
+First time:
+1. Run 01_git_init.bat
+2. Confirm "Git initialization complete."
+3. The baseline is tagged as v1.5.
+
+Save future changes:
+1. Run 02_git_commit.bat
+2. Enter a short commit message.
+
+Check current state:
+- Run 03_git_status.bat
+
+Notes:
+- Generated images, model files, API secrets, and temporary files are excluded by .gitignore.
+- GitHub is not required.
