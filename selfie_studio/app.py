@@ -8322,10 +8322,18 @@ class App(tk.Tk):
         ttk.Label(top, text="Project").pack(side="left")
         self.history_project_filter = tk.StringVar(value="すべて")
         self.history_project_combo = ttk.Combobox(
-            top, textvariable=self.history_project_filter, state="readonly", width=24
+            top, textvariable=self.history_project_filter, state="readonly", width=22
         )
         self.history_project_combo.pack(side="left", padx=(6, 12))
         self.history_project_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_studio_history())
+
+        ttk.Label(top, text="Character").pack(side="left")
+        self.history_character_filter = tk.StringVar(value="すべて")
+        self.history_character_combo = ttk.Combobox(
+            top, textvariable=self.history_character_filter, state="readonly", width=18
+        )
+        self.history_character_combo.pack(side="left", padx=(6, 12))
+        self.history_character_combo.bind("<<ComboboxSelected>>", lambda _e: self.refresh_studio_history())
 
         ttk.Label(top, text="評価").pack(side="left")
         self.history_status_filter = tk.StringVar(value="すべて")
@@ -8358,17 +8366,19 @@ class App(tk.Tk):
             pady=(10, 6),
         )
 
-        cols = ("status", "time", "project", "model", "sampler", "image")
+        cols = ("status", "time", "project", "character", "model", "sampler", "size", "image")
         self.studio_history_tree = ttk.Treeview(
             left, columns=cols, show="headings", selectmode="browse"
         )
         for col, title, width in [
             ("status", "評価", 75),
             ("time", "日時", 135),
-            ("project", "Project", 190),
-            ("model", "モデル", 240),
-            ("sampler", "Sampler", 130),
-            ("image", "画像", 250),
+            ("project", "プロジェクト", 170),
+            ("character", "キャラクター", 150),
+            ("model", "モデル", 215),
+            ("sampler", "Sampler", 120),
+            ("size", "サイズ", 95),
+            ("image", "画像", 220),
         ]:
             self.studio_history_tree.heading(col, text=title)
             self.studio_history_tree.column(col, width=width)
@@ -8413,6 +8423,10 @@ class App(tk.Tk):
             actions, text="Generateへ復元",
             command=self.load_selected_history
         ).pack(side="left", padx=6)
+        ttk.Button(
+            actions, text="Generateへ画像を送る",
+            command=self.send_selected_history_image_to_generate
+        ).pack(side="left", padx=(0, 6))
         ttk.Button(
             actions, text="採用DBへ登録",
             command=self.history_adopt_selected
@@ -9533,6 +9547,26 @@ class App(tk.Tk):
         if self.history_project_filter.get() not in values:
             self.history_project_filter.set("すべて")
 
+    def _history_refresh_character_choices(self):
+        if not hasattr(self, "history_character_combo"):
+            return
+        names = ["すべて", "未設定"]
+        for character in self.repo.list_items("characters"):
+            display_name = character.get("display_name") or character.get("name")
+            if display_name:
+                names.append(display_name)
+        values = tuple(dict.fromkeys(names))
+        self.history_character_combo["values"] = values
+        if self.history_character_filter.get() not in values:
+            self.history_character_filter.set("すべて")
+    def _history_character_name(self, character_id):
+        if not character_id:
+            return "未設定"
+        item = self.repo.get_item("characters", character_id)
+        if not item:
+            return "不明Character"
+        return item.get("display_name") or item.get("name") or "名称なし"
+
     def _history_sha256(self, image_path):
         try:
             h = hashlib.sha256()
@@ -9581,6 +9615,19 @@ class App(tk.Tk):
                 except Exception:
                     character_id = ""
 
+        active_character_name = ""
+        if character_id:
+            character_item = self.repo.get_item("characters", character_id)
+            active_character_name = (
+                (character_item or {}).get("display_name")
+                or (character_item or {}).get("name")
+                or ""
+            )
+
+        master = self._get_active_character_master()
+        master_path = master.get("image_path") if isinstance(master, dict) else ""
+        master_type = master.get("master_type") if isinstance(master, dict) else ""
+
         import time
         created_at = created_at or image_path.stat().st_mtime or time.time()
 
@@ -9591,6 +9638,7 @@ class App(tk.Tk):
             "image_hash": image_hash,
             "project_id": project_id or "",
             "character_id": character_id or "",
+            "character_name": active_character_name or "",
             "status": "未評価",
             "tags": [],
             "notes": "",
@@ -9609,6 +9657,9 @@ class App(tk.Tk):
             "width": request.get("width", ""),
             "height": request.get("height", ""),
             "seed": "",
+            "master_image_path": master_path or "",
+            "master_type": master_type or "",
+            "master_character_name": active_character_name or "",
             "info": info if isinstance(info, (str, dict, list, int, float, type(None))) else str(info),
         }
         saved = self.repo.upsert_item("history", item)
@@ -9647,6 +9698,7 @@ class App(tk.Tk):
             "未評価": "○ 未評価",
             "採用": "★ 採用",
             "仮採用": "△ 仮採用",
+            "保留": "● 保留",
             "作業中": "● 作業中",
             "不採用": "× 不採用",
         }.get(status or "未評価", status or "未評価")
@@ -9656,8 +9708,10 @@ class App(tk.Tk):
             return
 
         self._history_refresh_project_choices()
+        self._history_refresh_character_choices()
 
         project_filter = self.history_project_filter.get()
+        character_filter = self.history_character_filter.get() if hasattr(self, "history_character_filter") else "すべて"
         status_filter = self.history_status_filter.get()
         q = self.history_search.get().strip().lower()
 
@@ -9673,6 +9727,8 @@ class App(tk.Tk):
                 tags = [x.strip() for x in tags.split(",") if x.strip()]
 
             if project_filter != "すべて" and project_name != project_filter:
+                continue
+            if character_filter != "すべて" and self._history_character_name(item.get("character_id")) != character_filter:
                 continue
             if status_filter != "すべて" and status != status_filter:
                 continue
@@ -9701,14 +9757,20 @@ class App(tk.Tk):
                 stamp = _dt.fromtimestamp(float(item.get("created_at") or 0)).strftime("%Y-%m-%d %H:%M")
             except Exception:
                 stamp = ""
+            size_text = ""
+            if item.get("width") or item.get("height"):
+                size_text = f"{item.get('width','')}×{item.get('height','')}".strip("×")
+
             self.studio_history_tree.insert(
                 "", "end", iid=item.get("id"),
                 values=(
                     self._history_status_display(item.get("status") or "未評価"),
                     stamp,
                     self._history_project_name(item.get("project_id")),
+                    self._history_character_name(item.get("character_id")),
                     item.get("model") or "",
                     item.get("sampler") or "",
+                    size_text or "",
                     Path(item.get("image_path") or "").name,
                 )
             )
@@ -9788,7 +9850,40 @@ class App(tk.Tk):
         self.history_notes_edit.delete("1.0", "end")
         self.history_notes_edit.insert("1.0", r.get("notes") or "")
 
+        adopted_record = self.repo.find_adopted_by_history(r.get("id") or "")
+        adopted_status = "採用済み" if adopted_record else "未採用"
+        adopted_theme = (
+            (adopted_record or {}).get("library_theme")
+            or r.get("library_theme")
+            or "-"
+        )
+        adopted_version = (
+            (adopted_record or {}).get("library_version")
+            or r.get("library_version")
+            or "-"
+        )
+        adopted_at = (
+            (adopted_record or {}).get("adopted_at")
+            or "-"
+        )
+
+        master_path = r.get("master_image_path") or ""
+        master_name = Path(master_path).name if master_path else ""
+        master_type = r.get("master_type") or ""
+        master_label = (
+            f"{master_type} / {master_name}" if master_name else "なし"
+        )
+
         detail = (
+            f"Project: {self._history_project_name(r.get('project_id'))}\n"
+            f"Character: {self._history_character_name(r.get('character_id'))}\n"
+            f"Master: {master_label}\n"
+            f"制作状態: {r.get('status') or '未評価'}\n"
+            f"登録日時: {r.get('created_at') or ''}\n"
+            f"採用情報: {adopted_status}\n"
+            f"採用テーマ: {adopted_theme}\n"
+            f"採用バージョン: {adopted_version}\n"
+            f"採用日時: {adopted_at}\n\n"
             "Prompt:\n" + (r.get("prompt") or "") +
             "\n\nNegative:\n" + (r.get("negative_prompt") or "") +
             "\n\nModel:\n" + (r.get("model") or "") +
@@ -9841,6 +9936,17 @@ class App(tk.Tk):
             if x.strip()
         ]
         updated["notes"] = self.history_notes_edit.get("1.0", "end").strip()
+
+        theme_version = self._ask_adopted_theme_and_version(
+            default_name=updated.get("name") or Path(updated.get("image_path") or "").stem
+        )
+        if theme_version is None or theme_version.get("theme") is None:
+            return
+        if theme_version.get("theme"):
+            updated["library_theme"] = theme_version["theme"]
+        if theme_version.get("version"):
+            updated["library_version"] = theme_version["version"]
+
         self.repo.upsert_item("history", updated)
 
         from datetime import datetime as _dt
@@ -9963,6 +10069,30 @@ class App(tk.Tk):
             self.tabs.select(self.generate)
         except Exception:
             pass
+
+    def send_selected_history_image_to_generate(self):
+        record = self._selected_studio_record()
+        if not record:
+            messagebox.showinfo("History", "送る画像を選択してください。")
+            return
+
+        path = Path(record.get("image_path") or "")
+        if not path.is_file():
+            messagebox.showwarning(
+                "History",
+                f"画像ファイルが見つかりません。\n\n{path}"
+            )
+            return
+
+        self._show_record_in_generate_detail(record, refresh_gallery=False)
+        try:
+            self.tabs.select(self.generate)
+        except Exception:
+            pass
+        self.status.set(
+            f"History画像「{path.name}」をGenerateの選択画像詳細へ送りました。"
+            "画像や生成条件は変更していません。"
+        )
 
     def open_selected_studio_image(self):
         r = self._selected_studio_record()
@@ -11673,6 +11803,79 @@ class App(tk.Tk):
             f"生成時刻: {created_text or '-'}"
         )
 
+    def _show_record_in_generate_detail(self, record, refresh_gallery=True):
+        if not record:
+            return
+        self._session_selected_path = str(record.get("image_path") or "")
+        self._update_latest_generated_panel(record)
+        path = Path(record.get("image_path") or "")
+        if path.exists():
+            self._show_preview(path)
+        if refresh_gallery:
+            self._render_session_generation_gallery()
+    def save_latest_generated_status(self):
+        record = getattr(self, "_latest_generated_record", None)
+        if not record:
+            messagebox.showinfo("状態保存", "保存する最新生成画像がありません。")
+            return
+
+        selected_status = self.latest_generated_status_choice.get().strip() or "未評価"
+        if selected_status not in {"未評価", "採用", "仮採用", "保留", "不採用"}:
+            selected_status = "未評価"
+
+        updated = dict(record)
+        updated["status"] = selected_status
+        try:
+            updated = self.repo.upsert_item("history", updated)
+        except Exception as e:
+            messagebox.showerror(
+                "状態保存",
+                f"最新生成画像の状態保存に失敗しました。\n{e}"
+            )
+            return
+
+        self._latest_generated_record = updated
+        self.latest_generated_status.set(f"生成状態: {selected_status}")
+        self.status.set(f"最新生成画像の状態を保存しました: {selected_status}")
+        self._refresh_generate_workflow_state()
+        self.refresh_studio_history()
+    def _ask_adopted_theme_and_version(self, default_name=""):
+        dialog = tk.Toplevel(self)
+        dialog.title("採用画像情報")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="日本語テーマ名").pack(anchor="w")
+        theme_entry = ttk.Entry(frame, width=40)
+        theme_entry.pack(fill="x", pady=(2, 8))
+        theme_entry.insert(0, default_name)
+
+        ttk.Label(frame, text="バージョン").pack(anchor="w")
+        version_entry = ttk.Entry(frame, width=40)
+        version_entry.pack(fill="x", pady=(2, 8))
+
+        result = {"theme": None, "version": None}
+
+        def on_ok():
+            result["theme"] = theme_entry.get().strip()
+            result["version"] = version_entry.get().strip()
+            dialog.destroy()
+
+        def on_cancel():
+            result["theme"] = None
+            dialog.destroy()
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(12, 0))
+        ttk.Button(button_frame, text="レビュー開始", command=on_ok).pack(side="right")
+        ttk.Button(button_frame, text="キャンセル", command=on_cancel).pack(side="right", padx=(6, 0))
+
+        self.wait_window(dialog)
+        return result
+
     def save_current_prompt_from_generate(self):
         prompt_text = self.prompt.get("1.0", "end").strip()
         negative_text = self.negative.get("1.0", "end").strip()
@@ -11851,6 +12054,192 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("最新生成", f"画像を開けませんでした。\\n{e}")
 
+    def open_latest_generated_image_folder(self):
+        record = getattr(self, "_latest_generated_record", None)
+        if not record:
+            messagebox.showinfo("Open Latest Image", "まだ最新生成画像がありません。")
+            return
+
+        image_path = str(record.get("image_path") or "")
+        if not image_path:
+            messagebox.showwarning("Open Latest Image", "最新生成画像のパスが見つかりません。")
+            return
+
+        folder = Path(image_path).parent
+        if not folder.exists():
+            messagebox.showwarning(
+                "Open Latest Image",
+                f"画像フォルダーが見つかりません。\n\n{folder}"
+            )
+            return
+
+        try:
+            os.startfile(str(folder))
+        except Exception as e:
+            messagebox.showerror("Open Latest Image", f"フォルダーを開けませんでした。\n{e}")
+    def _ask_review_goal(self):
+        presets = [
+            "全体レビュー",
+            "顔",
+            "目",
+            "髪",
+            "背景",
+            "光・ライティング",
+            "プロンプト改善",
+        ]
+
+        dialog = tk.Toplevel(self)
+        dialog.title("レビュー対象を選択")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="改善したい点を選択してください",
+            font=(None, 11, "bold")
+        ).pack(anchor="w")
+
+        goal_var = tk.StringVar(value=presets[0])
+        for preset in presets:
+            ttk.Radiobutton(
+                frame,
+                text=preset,
+                variable=goal_var,
+                value=preset
+            ).pack(anchor="w", pady=1)
+
+        ttk.Label(frame, text="自由入力:").pack(anchor="w", pady=(8, 0))
+        custom_entry = ttk.Entry(frame, width=40)
+        custom_entry.pack(fill="x")
+        custom_entry.focus_set()
+
+        result = {"value": None}
+
+        def on_ok():
+            custom = custom_entry.get().strip()
+            result["value"] = custom or goal_var.get()
+            dialog.destroy()
+
+        def on_cancel():
+            result["value"] = None
+            dialog.destroy()
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(12, 0))
+        ttk.Button(button_frame, text="レビュー開始", command=on_ok).pack(side="right")
+        ttk.Button(button_frame, text="キャンセル", command=on_cancel).pack(side="right", padx=(0, 6))
+
+        self.wait_window(dialog)
+        return result["value"]
+    def send_latest_generated_to_selfie(self):
+        record = getattr(self, "_latest_generated_record", None)
+        if not record:
+            messagebox.showinfo("Send to Selfie", "まだ送信対象の生成画像がありません。")
+            return
+
+        goal_text = self._ask_review_goal()
+        if goal_text is None:
+            return
+
+        image_path = str(record.get("image_path") or "")
+        absolute_image_path = ""
+        if image_path:
+            try:
+                absolute_image_path = str(Path(image_path).resolve())
+            except Exception:
+                absolute_image_path = image_path
+
+        prompt_text = self.prompt.get("1.0", "end").strip()
+        negative_text = self.negative.get("1.0", "end").strip()
+        model_text = self.model_combo.get().strip() if hasattr(self, "model_combo") else ""
+        sampler_text = self.sampler.get() if hasattr(self, "sampler") else ""
+        steps_value = self.steps.get() if hasattr(self, "steps") else ""
+        cfg_value = self.cfg.get() if hasattr(self, "cfg") else ""
+        width_value = self.width.get() if hasattr(self, "width") else ""
+        height_value = self.height.get() if hasattr(self, "height") else ""
+        size_text = f"{width_value}x{height_value}" if width_value and height_value else ""
+        seed_value = record.get("seed") if record.get("seed") not in ("", None) else "-"
+
+        master = self._get_active_character_master()
+        master_text = "-"
+        master_type_text = "-"
+        if master:
+            master_text = str(Path(master.get("image_path") or "").resolve())
+            master_type_text = master.get("master_type") or "-"
+
+        lora_entries = []
+        for lora_name, weight in (self.active_loras or {}).items():
+            try:
+                lora_entries.append(f"{lora_name}:{float(weight):g}")
+            except Exception:
+                lora_entries.append(str(lora_name))
+        lora_text = ", ".join(lora_entries) if lora_entries else "なし"
+
+        markdown_lines = [
+            "# Image Review",
+            "",
+            "## Goal",
+            goal_text or "-",
+            "",
+            "## Image",
+            absolute_image_path or "-",
+            "",
+            "## Prompt",
+            prompt_text or "-",
+            "",
+            "## Negative Prompt",
+            negative_text or "-",
+            "",
+            "## Model",
+            model_text or "-",
+            "",
+            "## LoRA",
+            lora_text,
+            "",
+            "## Sampler",
+            sampler_text or "-",
+            "",
+            "## Steps",
+            str(steps_value) if steps_value != "" else "-",
+            "",
+            "## CFG",
+            str(cfg_value) if cfg_value != "" else "-",
+            "",
+            "## Seed",
+            str(seed_value),
+            "",
+            "## Size",
+            size_text or "-",
+            "",
+            "## Master",
+            master_text,
+            "",
+            "## Master Type",
+            master_type_text,
+            "",
+            "## Improvement Notes",
+            "(write here)",
+        ]
+        markdown = "\n".join(markdown_lines)
+
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(markdown)
+            self.update()
+            messagebox.showinfo(
+                "Send to Selfie",
+                "✅ レビュー内容をクリップボードにコピーしました。\n生成画像を添付して貼り付けてください。"
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Send to Selfie",
+                f"クリップボードへのコピーに失敗しました。\n{e}"
+            )
+
     def adopt_latest_generated_image(self):
         record = getattr(self, "_latest_generated_record", None)
         if not record:
@@ -11864,13 +12253,28 @@ class App(tk.Tk):
             )
             return
 
+        theme_version = self._ask_adopted_theme_and_version(
+            default_name=Path(record.get("image_path") or "").stem
+        )
+        if theme_version is None or theme_version.get("theme") is None:
+            return
+
         updated = dict(record)
         updated["status"] = "採用"
+        if theme_version.get("theme"):
+            updated["library_theme"] = theme_version["theme"]
+        if theme_version.get("version"):
+            updated["library_version"] = theme_version["version"]
+
         try:
             self.repo.upsert_item("history", updated)
             adopted, created = self.repo.adopt_history_item(
                 history_id,
                 adopted_at=datetime.now().isoformat(timespec="seconds"),
+                extra={
+                    "library_theme": theme_version.get("theme") or "",
+                    "library_version": theme_version.get("version") or "",
+                },
             )
         except Exception as e:
             messagebox.showerror(
