@@ -6,7 +6,7 @@ def clamp_queue_count(value, minimum=1, maximum=20):
     return max(minimum, min(maximum, number))
 
 
-def build_generation_payload(*, prompt, negative_prompt, steps, cfg_scale, width, height, sampler_name):
+def build_generation_payload(*, prompt, negative_prompt, steps, cfg_scale, width, height, sampler_name, seed=-1, scheduler="Automatic"):
     return {
         "prompt": prompt or "",
         "negative_prompt": negative_prompt or "",
@@ -15,6 +15,8 @@ def build_generation_payload(*, prompt, negative_prompt, steps, cfg_scale, width
         "width": width,
         "height": height,
         "sampler_name": sampler_name or "",
+        "scheduler": scheduler or "Automatic",
+        "seed": seed,
         "batch_size": 1,
         "n_iter": 1,
     }

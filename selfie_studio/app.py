@@ -6753,6 +6753,10 @@ class App(tk.Tk):
             width=28
         )
         self.generate_preset_combo.pack(side="left", fill="x", expand=True)
+        self.generate_preset_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._refresh_generate_preset_update_button(),
+        )
         ttk.Button(
             preset_box,
             text="適用",
@@ -6763,6 +6767,13 @@ class App(tk.Tk):
             text="現在設定を保存",
             command=self.save_current_generate_preset
         ).pack(side="left", padx=(6, 0))
+        self.update_generate_preset_button = ttk.Button(
+            preset_box,
+            text="選択中を更新",
+            command=self.update_selected_generate_preset,
+            state="disabled",
+        )
+        self.update_generate_preset_button.pack(side="left", padx=(6, 0))
         ttk.Button(
             preset_box,
             text="削除",
@@ -6806,6 +6817,8 @@ class App(tk.Tk):
         self.width = tk.IntVar(value=1024)
         self.height = tk.IntVar(value=1024)
         self.sampler = tk.StringVar(value="DPM++ 2M")
+        self.seed = tk.StringVar(value="-1")
+        self.scheduler = tk.StringVar(value="Automatic")
 
         ttk.Label(grid, text="Steps").grid(row=0, column=0, sticky="w")
         ttk.Entry(grid, textvariable=self.steps, width=7).grid(
@@ -6830,6 +6843,20 @@ class App(tk.Tk):
         self.sampler_combo.grid(
             row=0, column=9, sticky="ew", padx=(4, 0)
         )
+        ttk.Label(grid, text="Seed").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(grid, textvariable=self.seed, width=12).grid(
+            row=1, column=1, sticky="w", padx=(4, 10), pady=(6, 0)
+        )
+        ttk.Label(grid, text="Scheduler").grid(
+            row=1, column=2, sticky="w", pady=(6, 0)
+        )
+        ttk.Combobox(
+            grid,
+            textvariable=self.scheduler,
+            values=("Automatic", "Karras"),
+            state="readonly",
+            width=12,
+        ).grid(row=1, column=3, sticky="w", padx=(4, 10), pady=(6, 0))
         grid.columnconfigure(9, weight=1)
 
         # Forge向けの更新・確認操作は普段使わないので折りたたむ。
@@ -7120,18 +7147,39 @@ class App(tk.Tk):
         self.generate_preset_combo["values"] = names
         if self.generate_preset_name.get() not in names:
             self.generate_preset_name.set("未選択")
+        self._refresh_generate_preset_update_button()
 
-    def save_current_generate_preset(self):
-        name = simpledialog.askstring(
-            "Generateプリセット",
-            "プリセット名を入力してください。",
-            parent=self
+    def _refresh_generate_preset_update_button(self):
+        if not hasattr(self, "update_generate_preset_button"):
+            return
+        name = self.generate_preset_name.get().strip()
+        selected = (
+            bool(name)
+            and name != "未選択"
+            and name in getattr(self, "_generate_preset_records", {})
         )
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            return
+        self.update_generate_preset_button.configure(
+            state="normal" if selected else "disabled"
+        )
+
+    def save_current_generate_preset(
+        self, preset_name=None, confirm_existing=True, update_status=False
+    ):
+        if preset_name is None:
+            name = simpledialog.askstring(
+                "Generateプリセット",
+                "プリセット名を入力してください。",
+                parent=self
+            )
+            if not name:
+                return
+            name = name.strip()
+            if not name:
+                return
+        else:
+            name = str(preset_name).strip()
+            if not name:
+                return
 
         existing = None
         try:
@@ -7145,7 +7193,7 @@ class App(tk.Tk):
         except Exception:
             existing = None
 
-        if existing:
+        if existing and confirm_existing:
             if not messagebox.askyesno(
                 "Generateプリセット",
                 f"「{name}」は既に存在します。\n上書きしますか？"
@@ -7166,11 +7214,15 @@ class App(tk.Tk):
         item.update({
             "name": name,
             "category": "generate",
+            "prompt": self.prompt.get("1.0", "end").strip(),
+            "negative_prompt": self.negative.get("1.0", "end").strip(),
             "model": self.model_combo.get().strip() if hasattr(self, "model_combo") else "",
             "loras": loras,
             "sampler": self.sampler.get() if hasattr(self, "sampler") else "",
+            "scheduler": self.scheduler.get() if hasattr(self, "scheduler") else "Automatic",
             "steps": self.steps.get() if hasattr(self, "steps") else 28,
             "cfg": self.cfg.get() if hasattr(self, "cfg") else 6.0,
+            "seed": self.seed.get() if hasattr(self, "seed") else "-1",
             "width": self.width.get() if hasattr(self, "width") else 1024,
             "height": self.height.get() if hasattr(self, "height") else 1024,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
@@ -7179,7 +7231,32 @@ class App(tk.Tk):
         saved = self.repo.upsert_item("presets", item)
         self.refresh_generate_presets()
         self.generate_preset_name.set(saved.get("name") or name)
-        self.status.set(f"Generateプリセットを保存しました: {name}")
+        self._refresh_generate_preset_update_button()
+        if update_status:
+            self.status.set(f"{name} を更新しました")
+        else:
+            self.status.set(f"Generateプリセットを保存しました: {name}")
+
+    def update_selected_generate_preset(self):
+        name = self.generate_preset_name.get().strip()
+        item = getattr(self, "_generate_preset_records", {}).get(name)
+        if not name or name == "未選択" or not item:
+            messagebox.showinfo(
+                "Generateプリセット",
+                "更新するGenerateプリセットを選択してください。",
+            )
+            self._refresh_generate_preset_update_button()
+            return
+        if not messagebox.askyesno(
+            "Generateプリセット更新",
+            f"{name} を現在設定で更新しますか？",
+        ):
+            return
+        self.save_current_generate_preset(
+            preset_name=name,
+            confirm_existing=False,
+            update_status=True,
+        )
 
     def apply_selected_generate_preset(self):
         name = self.generate_preset_name.get().strip()
@@ -7222,6 +7299,20 @@ class App(tk.Tk):
         sampler = item.get("sampler") or ""
         if sampler:
             self.sampler.set(sampler)
+
+        if "scheduler" in item and item.get("scheduler") not in (None, ""):
+            self.scheduler.set(str(item.get("scheduler")))
+        if "seed" in item and item.get("seed") not in (None, ""):
+            self.seed.set(str(item.get("seed")))
+
+        if "prompt" in item:
+            self.prompt.delete("1.0", "end")
+            self.prompt.insert("1.0", str(item.get("prompt") or ""))
+        if "negative_prompt" in item:
+            self.negative.delete("1.0", "end")
+            self.negative.insert(
+                "1.0", str(item.get("negative_prompt") or "")
+            )
 
         try:
             self.active_loras = {}
@@ -11281,6 +11372,13 @@ class App(tk.Tk):
         if not selected_model:
             issues.append("Model未選択")
 
+        try:
+            seed = int(self.seed.get().strip())
+            if seed < -1:
+                raise ValueError
+        except (TypeError, ValueError):
+            issues.append("Seedは-1または0以上の整数で指定")
+
         # Output destination derived from Forge root.
         forge_root = ""
         try:
@@ -11994,6 +12092,8 @@ class App(tk.Tk):
             width=self.width.get(),
             height=self.height.get(),
             sampler_name=self.sampler.get().strip(),
+            seed=int(self.seed.get().strip()),
+            scheduler=self.scheduler.get(),
         )
 
         selected_model = self.model_combo.get().strip()
@@ -12219,6 +12319,8 @@ class App(tk.Tk):
             width=self.width.get(),
             height=self.height.get(),
             sampler_name=self.sampler.get().strip(),
+            seed=int(self.seed.get().strip()),
+            scheduler=self.scheduler.get(),
         )
         selected_model = self.model_combo.get().strip()
         generation_loras = dict(self.active_loras)
