@@ -57,3 +57,6 @@ backups/
 
 # NAS / local-only paths
 local_settings.json
+
+# Forge runtime diagnostics
+/script_info.json
