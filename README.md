@@ -2,6 +2,17 @@
 
 Pinokio版 Stable Diffusion WebUI Forge を前提にした初期実用テスト版です。
 
+## セットアップ
+
+Post Color Correctionを含む正式な依存関係を、Studioを起動するPython環境へ導入します。
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+`Start_Selfie_AI_Studio.vbs` はPATH上の `pythonw.exe` を使用するため、上記の
+`python.exe` と同じインストール先であることを確認してください。
+
 ## 現在の主要機能
 - Shiori Themeを基盤にしたUI Theme切替と設定保存
 - UI Font切替（Current / Default、Yu Gothic UI、Meiryo UI）と未検出時のDefaultフォールバック
