@@ -1,6 +1,5 @@
 from __future__ import annotations
 import base64
-
 import struct
 import zlib
 import json
@@ -8,6 +7,7 @@ import hashlib
 import re
 import threading
 import time
+from fractions import Fraction
 from datetime import datetime
 from pathlib import Path
 from selfie_studio.studio_helpers import (
@@ -230,6 +230,24 @@ class App(tk.Tk):
         style.configure("TLabel", background=colors["background"], foreground=colors["text"])
         style.configure("Muted.TLabel", foreground=colors["text_muted"], font=UI_FONT_SMALL)
         style.configure("Important.TLabel", foreground=colors["text"], font=UI_FONT_SECTION, padding=(2, 4))
+        style.configure("SummaryReady.TLabel", foreground=colors["success"], font=UI_FONT_SMALL)
+        style.configure("SummaryPartial.TLabel", foreground=colors["text_muted"], font=UI_FONT_SMALL)
+        style.configure("SummaryMissing.TLabel", foreground=colors["danger"], font=UI_FONT_SMALL)
+        style.configure("Flow.TLabel", foreground=colors["text"], font=UI_FONT_EMPHASIS, padding=(4, 6))
+        style.configure("StatusBar.TFrame", background=colors["panel"])
+        style.configure("StatusInfo.TLabel", background=colors["panel"], foreground=colors["text"], font=UI_FONT_EMPHASIS, padding=(4, 2))
+        style.configure("FlowDone.TLabel", background=colors["panel_alt"], foreground=colors["success"], font=UI_FONT_EMPHASIS, padding=(10, 8))
+        style.configure("FlowCurrent.TLabel", background=colors["selection"], foreground=colors["text"], bordercolor=colors["accent"], borderwidth=1, relief="solid", font=UI_FONT_SECTION, padding=(10, 8))
+        style.configure("FlowPending.TLabel", background=colors["panel"], foreground=colors["text_muted"], font=UI_FONT_EMPHASIS, padding=(10, 8))
+        style.configure("FlowMissing.TLabel", background=colors["panel_alt"], foreground=colors["danger"], font=UI_FONT_EMPHASIS, padding=(10, 8))
+        style.configure("FlowArrow.TLabel", background=colors["panel"], foreground=colors["text_muted"], font=UI_FONT_EMPHASIS)
+        style.configure("GenerationIdle.TLabel", background=colors["panel"], foreground=colors["text_muted"], font=UI_FONT_EMPHASIS, padding=(8, 5))
+        style.configure("GenerationRunning.TLabel", background=colors["selection"], foreground=colors["text"], bordercolor=colors["accent"], borderwidth=1, relief="solid", font=UI_FONT_EMPHASIS, padding=(8, 5))
+        style.configure("GenerationComplete.TLabel", background=colors["panel_alt"], foreground=colors["success"], font=UI_FONT_EMPHASIS, padding=(8, 5))
+        style.configure("GenerationFailed.TLabel", background=colors["panel_alt"], foreground=colors["danger"], font=UI_FONT_EMPHASIS, padding=(8, 5))
+        style.configure("Thumbnail.TButton", background=colors["panel_alt"], foreground=colors["text"], bordercolor=colors["border"], padding=4)
+        style.configure("Selected.Thumbnail.TButton", background=colors["selection"], foreground=colors["text"], bordercolor=colors["accent"], padding=4)
+        style.map("Selected.Thumbnail.TButton", background=[("active", colors["selection"]), ("pressed", colors["accent_hover"])])
         style.configure("TLabelframe", background=colors["panel"], bordercolor=colors["border"], relief="solid")
         style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"], font=UI_FONT_SECTION, padding=(3, 5))
         style.configure("Important.TLabelframe", background=colors["panel"], bordercolor=colors["accent"], borderwidth=1, relief="solid")
@@ -309,7 +327,6 @@ class App(tk.Tk):
         if hasattr(self, "status"):
             suffix = "" if self._ui_font_available else "（Defaultへフォールバック）"
             self.status.set(f"UI Fontを変更しました: {selected}{suffix}")
-
 
     def _build_home(self):
         top = ttk.Frame(self.home)
@@ -5720,6 +5737,7 @@ class App(tk.Tk):
             + (" / " + " / ".join(notes) if notes else "")
             + "。生成は開始していません。"
         )
+        self._refresh_latest_master_status()
 
         try:
             self.tabs.select(self.generate)
@@ -6456,6 +6474,7 @@ class App(tk.Tk):
             except Exception:
                 pass
 
+        self._refresh_latest_master_status()
         output_dir = item.get("output_dir") or ""
 
         # Build a visible summary of what was restored.
@@ -6498,6 +6517,7 @@ class App(tk.Tk):
         # Generate画面は機能追加で縦に長くなるため、初期ウィンドウサイズでも
         # 下部の生成ボタンまでアクセスできるよう縦スクロール対応にする。
         gen_canvas = tk.Canvas(self.generate, highlightthickness=0)
+        self.generate_canvas = gen_canvas
         gen_scroll = ttk.Scrollbar(
             self.generate, orient="vertical", command=gen_canvas.yview
         )
@@ -6531,11 +6551,12 @@ class App(tk.Tk):
         gen_canvas.bind("<Enter>", _gen_bind_wheel)
         gen_canvas.bind("<Leave>", _gen_unbind_wheel)
 
-        workflow_box = ttk.LabelFrame(gen_body, text="制作ナビ", padding=8)
-        workflow_box.pack(fill="x", pady=(0, 8))
+        # Step 2: legacy workflow variables remain available to existing update
+        # code, while their verbose panels stay out of the main visual flow.
+        workflow_box = ttk.Frame(gen_body)
 
         self.workflow_nav_var = tk.StringVar(
-            value="Project → Character → Generate → 採用"
+            value="制作フロー: Project → Character → Generate → 採用"
         )
         ttk.Label(
             workflow_box,
@@ -6552,8 +6573,7 @@ class App(tk.Tk):
             anchor="w"
         ).pack(fill="x", pady=(4, 0))
 
-        project_banner = ttk.LabelFrame(gen_body, text="現在の制作内容", padding=8)
-        project_banner.pack(fill="x", pady=(0, 10))
+        project_banner = ttk.Frame(gen_body)
 
         # 既存コード互換用。画面表示は下の項目別StringVarを使う。
         self.current_project_summary = tk.StringVar(value="未選択")
@@ -6569,7 +6589,7 @@ class App(tk.Tk):
         summary_grid.pack(fill="x")
 
         summary_rows = (
-            ("Project", self.workflow_project_var, "Character", self.workflow_character_var),
+            ("プロジェクト", self.workflow_project_var, "キャラクター", self.workflow_character_var),
             ("Preset", self.workflow_preset_var, "Prompt", self.workflow_prompt_var),
             ("Model", self.workflow_model_var, "LoRA", self.workflow_lora_var),
         )
@@ -6591,8 +6611,113 @@ class App(tk.Tk):
         summary_grid.columnconfigure(1, weight=1)
         summary_grid.columnconfigure(3, weight=1)
 
-        quick = ttk.LabelFrame(gen_body, text="制作準備", padding=8)
-        quick.pack(fill="x", pady=(0, 10))
+        self.production_flow_var = tk.StringVar(
+            value="● ① 制作準備  →  ○ ② 生成設定  →  ○ ③ 生成  →  ○ ④ 確認・比較  →  ○ ⑤ 採否"
+        )
+        flow_row = ttk.Frame(gen_body, style="StatusBar.TFrame", padding=(8, 6))
+        flow_row.pack(fill="x", pady=(0, 6))
+        flow_steps = ("制作準備", "生成設定", "生成", "確認・比較", "採否")
+        self.production_flow_step_vars = []
+        self.production_flow_step_labels = []
+        for index, step_name in enumerate(flow_steps):
+            step_var = tk.StringVar(value=f"○ {step_name}")
+            step_label = ttk.Label(
+                flow_row,
+                textvariable=step_var,
+                style="FlowPending.TLabel",
+                anchor="center",
+            )
+            step_label.pack(side="left", fill="x", expand=True)
+            self.production_flow_step_vars.append(step_var)
+            self.production_flow_step_labels.append(step_label)
+            if index < len(flow_steps) - 1:
+                ttk.Label(
+                    flow_row, text="→", style="FlowArrow.TLabel"
+                ).pack(side="left", padx=3)
+
+        status_row = ttk.Frame(gen_body, style="StatusBar.TFrame", padding=(8, 4))
+        status_row.pack(fill="x", pady=(0, 6))
+        self.top_context_status_var = tk.StringVar(
+            value="Project: 未選択 / Character: 未選択 / Preset: 未選択"
+        )
+        self.top_generate_status_var = tk.StringVar(value="● 待機中")
+        ttk.Label(
+            status_row,
+            textvariable=self.top_context_status_var,
+            style="StatusInfo.TLabel",
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+        self.top_generate_status_label = ttk.Label(
+            status_row,
+            textvariable=self.top_generate_status_var,
+            style="GenerationIdle.TLabel",
+        )
+        self.top_generate_status_label.pack(side="right", padx=(12, 8))
+        ttk.Label(
+            status_row,
+            textvariable=self.connection_var,
+            style="StatusInfo.TLabel",
+        ).pack(side="right")
+
+        quick_region = ttk.Frame(gen_body)
+        quick_region.pack(fill="x", pady=(0, 8))
+        quick_header = ttk.Frame(quick_region, style="Panel.TFrame", padding=(8, 5))
+        quick_header.pack(fill="x")
+        self.production_setup_visible = tk.BooleanVar(value=False)
+        self.production_setup_button_text = tk.StringVar(value="▶ 制作準備")
+        self.production_setup_summary_var = tk.StringVar(
+            value="Project: 未選択 / Character: 未選択 / Prompt: 未選択"
+        )
+        self.production_setup_model_var = tk.StringVar(
+            value="Model: 未選択 / LoRA: 0件"
+        )
+        self.production_setup_checks_var = tk.StringVar(
+            value="× Project  × Character  × Prompt  × Model  × LoRA"
+        )
+        quick = ttk.LabelFrame(quick_region, text="制作準備", padding=8)
+        self.production_setup_content = quick
+
+        def toggle_production_setup():
+            visible = not self.production_setup_visible.get()
+            self.production_setup_visible.set(visible)
+            self.production_setup_button_text.set(
+                "▼ 制作準備" if visible else "▶ 制作準備"
+            )
+            if visible:
+                quick.pack(fill="x", pady=(4, 0))
+            else:
+                quick.pack_forget()
+
+        self.production_setup_toggle_button = ttk.Button(
+            quick_header,
+            textvariable=self.production_setup_button_text,
+            command=toggle_production_setup,
+        )
+        self.production_setup_toggle_button.grid(
+            row=0, column=0, rowspan=3, sticky="nsw", padx=(0, 12)
+        )
+        ttk.Label(
+            quick_header,
+            textvariable=self.production_setup_summary_var,
+            style="StatusInfo.TLabel",
+            anchor="w",
+        ).grid(row=0, column=1, sticky="ew")
+        ttk.Label(
+            quick_header,
+            textvariable=self.production_setup_model_var,
+            style="Muted.TLabel",
+            anchor="w",
+        ).grid(row=1, column=1, sticky="ew", pady=(2, 0))
+        self.production_setup_checks_label = ttk.Label(
+            quick_header,
+            textvariable=self.production_setup_checks_var,
+            style="SummaryMissing.TLabel",
+            anchor="w",
+        )
+        self.production_setup_checks_label.grid(
+            row=2, column=1, sticky="ew", pady=(2, 0)
+        )
+        quick_header.columnconfigure(1, weight=1)
 
         self.quick_project = tk.StringVar(value="未選択")
         self.quick_character = tk.StringVar(value="未選択")
@@ -6619,6 +6744,15 @@ class App(tk.Tk):
         )
         self.quick_prompt_combo.grid(row=0, column=5, sticky="ew", padx=(6, 12))
 
+        ttk.Label(quick, text="Model").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(
+            quick, textvariable=self.workflow_model_var, anchor="w"
+        ).grid(row=1, column=1, columnspan=3, sticky="ew", padx=(6, 12), pady=(6, 0))
+        ttk.Label(quick, text="LoRA").grid(row=1, column=4, sticky="w", pady=(6, 0))
+        ttk.Label(
+            quick, textvariable=self.workflow_lora_var, anchor="w"
+        ).grid(row=1, column=5, sticky="ew", padx=(6, 12), pady=(6, 0))
+
         ttk.Button(
             quick, text="再読込", command=self.refresh_generate_quick_setup
         ).grid(row=0, column=6, padx=(0, 6))
@@ -6626,7 +6760,8 @@ class App(tk.Tk):
             quick,
             text="制作開始",
             command=self.start_production_prepare,
-            width=12
+            width=12,
+            style="Accent.TButton",
         ).grid(row=0, column=7, columnspan=2, sticky="e", padx=(8, 0))
 
         self.quick_proposal_status = tk.StringVar(value="")
@@ -6634,10 +6769,10 @@ class App(tk.Tk):
             quick,
             textvariable=self.quick_proposal_status,
             anchor="w"
-        ).grid(row=1, column=0, columnspan=9, sticky="ew", pady=(6, 0))
+        ).grid(row=2, column=0, columnspan=9, sticky="ew", pady=(4, 0))
 
         session_row = ttk.Frame(quick)
-        session_row.grid(row=2, column=0, columnspan=9, sticky="ew", pady=(8, 0))
+        session_row.grid(row=3, column=0, columnspan=9, sticky="ew", pady=(6, 0))
         ttk.Label(session_row, text="制作セッション").pack(side="left")
         ttk.Button(
             session_row, text="保存",
@@ -6669,7 +6804,7 @@ class App(tk.Tk):
 
         detail_toggle_row = ttk.Frame(quick)
         detail_toggle_row.grid(
-            row=3, column=0, columnspan=9, sticky="ew", pady=(8, 0)
+            row=4, column=0, columnspan=9, sticky="ew", pady=(6, 0)
         )
 
         self.quick_detail_visible = tk.BooleanVar(value=False)
@@ -6684,7 +6819,7 @@ class App(tk.Tk):
                 self.quick_detail_button_text.set("▶ 個別適用")
             else:
                 partial.grid(
-                    row=4, column=0, columnspan=9,
+                    row=5, column=0, columnspan=9,
                     sticky="ew", pady=(6, 0)
                 )
                 self.quick_detail_visible.set(True)
@@ -6726,14 +6861,14 @@ class App(tk.Tk):
             textvariable=self.quick_active_summary,
             anchor="w",
             justify="left"
-        ).grid(row=5, column=0, columnspan=9, sticky="ew", pady=(8, 0))
+        ).grid(row=6, column=0, columnspan=7, sticky="ew", pady=(6, 0))
 
         self.generate_dirty_state = tk.StringVar(value="✓ 保存済み")
         ttk.Label(
             quick,
             textvariable=self.generate_dirty_state,
             anchor="w"
-        ).grid(row=6, column=0, columnspan=9, sticky="ew", pady=(4, 0))
+        ).grid(row=6, column=7, columnspan=2, sticky="e", pady=(6, 0))
 
         self.production_check_var = tk.StringVar(value="制作チェック: 未実行")
         ttk.Label(
@@ -6741,20 +6876,26 @@ class App(tk.Tk):
             textvariable=self.production_check_var,
             anchor="w",
             justify="left"
-        ).grid(row=7, column=0, columnspan=9, sticky="ew", pady=(4, 0))
+        ).grid(row=7, column=0, columnspan=9, sticky="ew", pady=(3, 0))
 
-        generation_box = ttk.LabelFrame(gen_body, text="生成設定", padding=8)
+        generation_box = ttk.LabelFrame(gen_body, text="生成ワークスペース", padding=10)
         generation_box.pack(fill="both", expand=True, pady=(0, 8))
 
         content = ttk.Frame(generation_box)
         content.pack(fill="both", expand=True)
+        content.columnconfigure(0, weight=2, uniform="generate_columns")
+        content.columnconfigure(1, weight=3, uniform="generate_columns")
+        content.rowconfigure(0, weight=1)
 
         left = ttk.Frame(content)
-        left.pack(side="left", fill="both", expand=True)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         right = ttk.Frame(content)
-        right.pack(side="right", fill="both", expand=True, padx=(12,0))
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
-        preset_box = ttk.LabelFrame(left, text="Generateプリセット", padding=6)
+        preset_box = ttk.LabelFrame(
+            left, text="生成プリセット", padding=8,
+            style="Important.TLabelframe"
+        )
         preset_box.pack(fill="x", pady=(0, 8))
 
         self.generate_preset_name = tk.StringVar(value="未選択")
@@ -6765,10 +6906,6 @@ class App(tk.Tk):
             width=28
         )
         self.generate_preset_combo.pack(side="left", fill="x", expand=True)
-        self.generate_preset_combo.bind(
-            "<<ComboboxSelected>>",
-            lambda _event: self._refresh_generate_preset_update_button(),
-        )
         ttk.Button(
             preset_box,
             text="適用",
@@ -6789,7 +6926,8 @@ class App(tk.Tk):
         ttk.Button(
             preset_box,
             text="削除",
-            command=self.delete_selected_generate_preset
+            command=self.delete_selected_generate_preset,
+            style="Danger.TButton",
         ).pack(side="left", padx=(6, 0))
 
         row = ttk.Frame(left)
@@ -6804,24 +6942,31 @@ class App(tk.Tk):
 
         lora_status_row = ttk.Frame(left)
         lora_status_row.pack(fill="x", pady=(5, 0))
-        ttk.Label(lora_status_row, text="有効LoRA", width=10).pack(side="left")
+        ttk.Label(
+            lora_status_row, text="有効LoRA", width=10,
+            style="Muted.TLabel"
+        ).pack(side="left")
         self.active_lora_summary = tk.StringVar(value="0件")
         ttk.Label(
             lora_status_row,
-            textvariable=self.active_lora_summary
+            textvariable=self.active_lora_summary,
+            style="Muted.TLabel",
         ).pack(side="left")
 
         self.current_model_var = tk.StringVar(value="未取得")
 
-        ttk.Label(left, text="プロンプト").pack(anchor="w", pady=(8,0))
+        ttk.Label(left, text="プロンプト / ポジティブ").pack(anchor="w", pady=(10, 4))
         self.prompt = tk.Text(left, height=8, wrap="word")
         self.prompt.pack(fill="x")
-        ttk.Label(left, text="ネガティブプロンプト").pack(anchor="w", pady=(6,0))
+        ttk.Label(left, text="ネガティブプロンプト").pack(anchor="w", pady=(8, 4))
         self.negative = tk.Text(left, height=5, wrap="word")
         self.negative.pack(fill="x")
 
         # よく使う生成設定は1段にまとめる。
-        grid = ttk.LabelFrame(left, text="基本生成設定", padding=6)
+        grid = ttk.LabelFrame(
+            left, text="基本生成設定", padding=8,
+            style="Important.TLabelframe"
+        )
         grid.pack(fill="x", pady=(8, 0))
 
         self.steps = tk.IntVar(value=28)
@@ -6872,14 +7017,18 @@ class App(tk.Tk):
         grid.columnconfigure(9, weight=1)
 
         # Forge向けの更新・確認操作は普段使わないので折りたたむ。
-        advanced_header = ttk.Frame(left)
-        advanced_header.pack(fill="x", pady=(6, 0))
+        advanced_region = ttk.Frame(left)
+        advanced_region.pack(fill="x", pady=(6, 0))
+        advanced_header = ttk.Frame(advanced_region)
+        advanced_header.pack(fill="x")
         self.generate_advanced_visible = tk.BooleanVar(value=False)
         self.generate_advanced_button_text = tk.StringVar(
             value="▶ 詳細設定"
         )
 
-        advanced = ttk.LabelFrame(left, text="詳細設定", padding=6)
+        advanced = ttk.LabelFrame(
+            advanced_region, text="詳細設定", padding=8
+        )
 
         def _toggle_generate_advanced():
             if self.generate_advanced_visible.get():
@@ -6916,7 +7065,10 @@ class App(tk.Tk):
             advanced, textvariable=self.current_model_var
         ).pack(side="left", fill="x", expand=True)
 
-        execute_box = ttk.LabelFrame(left, text="実行", padding=8)
+        execute_box = ttk.LabelFrame(
+            left, text="生成", padding=10,
+            style="Important.TLabelframe"
+        )
         execute_box.pack(fill="x", pady=(8, 0))
 
         self.queue_count = tk.IntVar(value=1)
@@ -6926,7 +7078,8 @@ class App(tk.Tk):
 
         ttk.Label(
             execute_box,
-            text="生成前チェック後、Forgeへ実際の生成要求を送ります。"
+            text="生成前チェック後、Forgeへ実際の生成要求を送ります。",
+            style="Muted.TLabel",
         ).pack(anchor="w")
 
         execute_row = ttk.Frame(execute_box)
@@ -6941,61 +7094,202 @@ class App(tk.Tk):
             width=6
         ).pack(side="left", padx=(6, 10))
 
-        ttk.Button(
+        self.queue_generate_button = ttk.Button(
             execute_row,
             text="連続生成",
-            command=self.start_generation_queue
-        ).pack(side="left")
-        ttk.Button(
+            command=self.start_generation_queue,
+            style="Accent.TButton",
+        )
+        self.queue_generate_button.pack(side="left")
+        self.stop_generation_button = ttk.Button(
             execute_row,
             text="停止",
             command=self.stop_generation_queue
-        ).pack(side="left", padx=(6, 0))
+        )
+        self.stop_generation_button.pack(side="left", padx=(6, 0))
 
         ttk.Label(
             execute_row,
-            textvariable=self.queue_status
+            textvariable=self.queue_status,
+            style="Muted.TLabel",
         ).pack(side="left", padx=(12, 0))
 
-        ttk.Button(
-            execute_row, text="1枚生成",
-            command=self.generate_image
-        ).pack(side="right")
+        self.single_generate_button = ttk.Button(
+            execute_row, text="1枚生成する",
+            command=self.generate_image,
+            style="Primary.TButton",
+        )
+        self.single_generate_button.pack(side="right")
+        self.generation_state_var = tk.StringVar(value="● 待機中")
+        self.generation_state_label = ttk.Label(
+            execute_row,
+            textvariable=self.generation_state_var,
+            style="GenerationIdle.TLabel",
+        )
+        self.generation_state_label.pack(side="right", padx=(10, 12))
+        self._set_generation_ui_state("idle")
 
-        session_box = ttk.LabelFrame(right, text="セッション生成一覧", padding=8)
-        session_box.pack(fill="x", pady=(0, 8))
+        # Master Reference controls (初期: OFF)
+        master_reference_box = ttk.LabelFrame(
+            left, text="マスター参照", padding=8
+        )
+        master_reference_box.pack(fill="x", pady=(8, 0))
+        master_row = ttk.Frame(master_reference_box)
+        master_row.pack(fill="x")
+        self.master_reference_var = tk.BooleanVar(value=False)
+        self.master_reference_strength = tk.DoubleVar(value=0.7)
+        ttk.Checkbutton(
+            master_row,
+            text="マスター参照を使用",
+            variable=self.master_reference_var
+        ).pack(side="left", padx=(0, 10))
+        ttk.Label(master_row, text="参照強度").pack(side="left")
+        ttk.Entry(
+            master_row,
+            textvariable=self.master_reference_strength,
+            width=6
+        ).pack(side="left", padx=(6, 0))
+
+        post_processing_box = ttk.LabelFrame(
+            left, text="色・画質調整", padding=8
+        )
+        post_processing_box.pack(fill="x", pady=(8, 0))
+        color_row = ttk.Frame(post_processing_box)
+        color_row.pack(fill="x")
+        self.post_color_correction_var = tk.BooleanVar(value=False)
+        self.post_color_contrast = tk.DoubleVar(value=1.0)
+        self.post_color_saturation = tk.DoubleVar(value=1.0)
+        self.post_color_brightness = tk.DoubleVar(value=1.0)
+        ttk.Checkbutton(
+            color_row,
+            text="色補正を使用",
+            variable=self.post_color_correction_var,
+        ).pack(side="left")
+        for label, variable in (
+            ("Contrast", self.post_color_contrast),
+            ("Saturation", self.post_color_saturation),
+            ("Brightness", self.post_color_brightness),
+        ):
+            ttk.Label(color_row, text=label).pack(side="left", padx=(10, 4))
+            ttk.Entry(color_row, textvariable=variable, width=6).pack(side="left")
+
+        color_preset_row = ttk.Frame(post_processing_box)
+        color_preset_row.pack(fill="x", pady=(6, 0))
+        ttk.Label(color_preset_row, text="色補正プリセット").pack(side="left")
+        self.color_correction_preset_name = tk.StringVar(value="未選択")
+        self.color_correction_preset_combo = ttk.Combobox(
+            color_preset_row,
+            textvariable=self.color_correction_preset_name,
+            state="readonly",
+            width=24,
+        )
+        self.color_correction_preset_combo.pack(side="left", padx=(6, 0))
+        self.color_correction_preset_combo.bind(
+            "<<ComboboxSelected>>",
+            self.apply_selected_color_correction_preset,
+        )
+        ttk.Button(
+            color_preset_row,
+            text="現在の3値を保存",
+            command=self.save_current_color_correction_preset,
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            color_preset_row,
+            text="削除",
+            command=self.delete_selected_color_correction_preset,
+            style="Danger.TButton",
+        ).pack(side="left", padx=(6, 0))
+        self.generate_preset_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _event: self._refresh_generate_preset_update_button(),
+        )
+        self.color_correction_preset_path = (
+            Path(self.shared_root) / "Data" / "color_correction_presets.json"
+        )
+        self.refresh_color_correction_presets()
+
+        latest_box = ttk.LabelFrame(
+            right, text="生成画像", padding=10,
+            style="Important.TLabelframe"
+        )
+        self.generate_preview_box = latest_box
+        latest_box.pack(fill="both", expand=True)
+
+        preview_stage = ttk.Frame(latest_box, height=520)
+        preview_stage.pack(fill="both", expand=True)
+        preview_stage.pack_propagate(False)
+        self.preview_label = ttk.Label(
+            preview_stage, text="生成画像プレビュー", anchor="center",
+            style="Important.TLabel",
+        )
+        self.preview_label.pack(fill="both", expand=True)
+        self.preview_label.configure(width=60)
+        self.preview_label.bind("<Configure>", self._schedule_generate_preview_redraw)
+
+        session_box = ttk.LabelFrame(
+            latest_box, text="このセッションの生成画像一覧", padding=6,
+            style="Important.TLabelframe"
+        )
+        self.session_generation_box = session_box
 
         self._session_generation_records = []
         self._session_generation_buttons = []
         self._session_gallery_refs = []
         self._session_selected_path = ""
 
-        self.session_gallery = ttk.Frame(session_box)
-        self.session_gallery.pack(fill="x")
+        session_viewport = ttk.Frame(session_box, height=205)
+        session_viewport.pack(fill="x")
+        session_viewport.pack_propagate(False)
+        self.session_gallery_canvas = tk.Canvas(
+            session_viewport, highlightthickness=0
+        )
+        session_scroll = ttk.Scrollbar(
+            session_viewport,
+            orient="vertical",
+            command=self.session_gallery_canvas.yview,
+        )
+        self.session_gallery_canvas.configure(
+            yscrollcommand=session_scroll.set
+        )
+        session_scroll.pack(side="right", fill="y")
+        self.session_gallery_canvas.pack(side="left", fill="both", expand=True)
+        self.session_gallery = ttk.Frame(self.session_gallery_canvas)
+        self._session_gallery_window = self.session_gallery_canvas.create_window(
+            (0, 0), window=self.session_gallery, anchor="nw"
+        )
+        self.session_gallery.bind(
+            "<Configure>",
+            lambda _event: self.session_gallery_canvas.configure(
+                scrollregion=self.session_gallery_canvas.bbox("all")
+            ),
+        )
+        self.session_gallery_canvas.bind(
+            "<Configure>",
+            lambda event: self.session_gallery_canvas.itemconfigure(
+                self._session_gallery_window, width=event.width
+            ),
+        )
+        self.session_gallery_canvas.bind(
+            "<MouseWheel>", self._scroll_session_generation_gallery
+        )
 
         session_footer = ttk.Frame(session_box)
         session_footer.pack(fill="x", pady=(6, 0))
-
-        self.session_gallery_status = tk.StringVar(value="このセッションの生成: 0枚")
+        self.session_gallery_status = tk.StringVar(
+            value="このセッションの生成: 0枚"
+        )
         ttk.Label(
             session_footer,
             textvariable=self.session_gallery_status,
-            anchor="w"
+            anchor="w",
+            style="Muted.TLabel",
         ).pack(side="left", fill="x", expand=True)
-
         ttk.Button(
             session_footer,
             text="一覧から外す",
-            command=self.remove_selected_session_generation
+            command=self.remove_selected_session_generation,
+            style="Danger.TButton",
         ).pack(side="right")
-
-        latest_box = ttk.LabelFrame(right, text="選択画像詳細", padding=8)
-        latest_box.pack(fill="both", expand=True)
-
-        self.preview_label = ttk.Label(
-            latest_box, text="生成画像プレビュー", anchor="center"
-        )
-        self.preview_label.pack(fill="both", expand=True)
 
         self.latest_generated_file = tk.StringVar(value="ファイル: 未生成")
         self.latest_generated_seed = tk.StringVar(value="Seed: -")
@@ -7003,9 +7297,36 @@ class App(tk.Tk):
         self.latest_generated_lora = tk.StringVar(value="LoRA: -")
         self.latest_generated_prompt = tk.StringVar(value="Prompt: -")
         self.latest_generated_time = tk.StringVar(value="生成時刻: -")
+        self.latest_generated_status = tk.StringVar(value="生成状態: 未評価")
+        self.latest_master_status = tk.StringVar(value="Master: 未設定")
 
+        info_toggle_row = ttk.Frame(latest_box)
+        info_toggle_row.pack(fill="x", pady=(4, 0))
+        self.preview_info_visible = tk.BooleanVar(value=False)
+        self.preview_info_button_text = tk.StringVar(value="▶ 画像情報")
         latest_info = ttk.Frame(latest_box)
-        latest_info.pack(fill="x", pady=(8, 0))
+
+        def _toggle_preview_info():
+            if self.preview_info_visible.get():
+                latest_info.pack_forget()
+                self.preview_info_visible.set(False)
+                self.preview_info_button_text.set("▶ 画像情報")
+            else:
+                latest_info.pack(fill="x", pady=(4, 0), before=latest_actions)
+                self.preview_info_visible.set(True)
+                self.preview_info_button_text.set("▼ 画像情報")
+
+        ttk.Button(
+            info_toggle_row,
+            textvariable=self.preview_info_button_text,
+            command=_toggle_preview_info,
+        ).pack(side="left")
+        ttk.Label(
+            info_toggle_row,
+            textvariable=self.latest_generated_file,
+            style="Muted.TLabel",
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True, padx=(8, 0))
         for var in (
             self.latest_generated_file,
             self.latest_generated_seed,
@@ -7013,12 +7334,17 @@ class App(tk.Tk):
             self.latest_generated_lora,
             self.latest_generated_prompt,
             self.latest_generated_time,
+            self.latest_generated_status,
+            self.latest_master_status,
         ):
             ttk.Label(
-                latest_info, textvariable=var, anchor="w"
+                latest_info, textvariable=var, anchor="w",
+                style="Muted.TLabel",
             ).pack(fill="x")
 
-        latest_actions = ttk.Frame(latest_box)
+        latest_actions = ttk.LabelFrame(
+            latest_box, text="画像を確認", padding=6
+        )
         latest_actions.pack(fill="x", pady=(8, 0))
         ttk.Button(
             latest_actions,
@@ -7027,36 +7353,132 @@ class App(tk.Tk):
         ).pack(side="left")
         ttk.Button(
             latest_actions,
-            text="選択画像を採用",
-            command=self.adopt_latest_generated_image
+            text="選択画像に色補正",
+            command=self.apply_color_correction_to_selected_image
+        ).pack(side="left", padx=(6, 0))
+        latest_status_actions = ttk.LabelFrame(
+            latest_box, text="評価・採否", padding=6,
+            style="Important.TLabelframe"
+        )
+        self.decision_box = latest_status_actions
+        latest_status_actions.pack(fill="x", pady=(6, 0))
+        self.latest_generated_status_choice = tk.StringVar(value="未評価")
+        ttk.Combobox(
+            latest_status_actions,
+            textvariable=self.latest_generated_status_choice,
+            state="readonly",
+            width=12,
+            values=("未評価", "採用", "仮採用", "保留", "不採用")
+        ).pack(side="left")
+        ttk.Button(
+            latest_status_actions,
+            text="状態を保存",
+            command=self.save_latest_generated_status
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            latest_actions,
-            text="Aに設定",
-            command=lambda: self.set_latest_generated_compare_slot("A")
+            latest_status_actions,
+            text="仮採用",
+            command=lambda: (
+                self.latest_generated_status_choice.set("仮採用"),
+                self.save_latest_generated_status(),
+            ),
+            style="Accent.TButton",
+        ).pack(side="left", padx=(10, 0))
+        ttk.Button(
+            latest_status_actions,
+            text="保留",
+            command=lambda: (
+                self.latest_generated_status_choice.set("保留"),
+                self.save_latest_generated_status(),
+            ),
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            latest_actions,
-            text="Bに設定",
-            command=lambda: self.set_latest_generated_compare_slot("B")
+            latest_status_actions,
+            text="不採用",
+            command=lambda: (
+                self.latest_generated_status_choice.set("不採用"),
+                self.save_latest_generated_status(),
+            ),
+            style="Danger.TButton",
         ).pack(side="left", padx=(6, 0))
         ttk.Button(
-            latest_actions,
-            text="A/B比較を開く",
-            command=self.open_adopted_compare_viewer
+            latest_status_actions,
+            text="採用",
+            command=self.adopt_latest_generated_image,
+            style="Success.TButton",
         ).pack(side="right")
 
-        workflow_actions = ttk.Frame(latest_box)
-        workflow_actions.pack(fill="x", pady=(6, 0))
+        # Keep the daily review flow together: preview, decision, then gallery.
+        session_box.pack(fill="x", pady=(8, 0), after=latest_status_actions)
+
+        def _collapsible_review_group(title, state_name, before=None):
+            region = ttk.Frame(latest_box)
+            pack_options = {"fill": "x", "pady": (6, 0)}
+            if before is not None:
+                pack_options["before"] = before
+            region.pack(**pack_options)
+            visible = tk.BooleanVar(value=False)
+            button_text = tk.StringVar(value=f"▶ {title}")
+            content = ttk.Frame(region)
+
+            def _toggle():
+                if visible.get():
+                    content.pack_forget()
+                    visible.set(False)
+                    button_text.set(f"▶ {title}")
+                else:
+                    content.pack(fill="x", pady=(4, 0))
+                    visible.set(True)
+                    button_text.set(f"▼ {title}")
+
+            toggle_button = ttk.Button(
+                region,
+                textvariable=button_text,
+                command=_toggle,
+            )
+            toggle_button.pack(anchor="w")
+            setattr(self, f"{state_name}_visible", visible)
+            setattr(self, f"{state_name}_button", toggle_button)
+            setattr(self, f"{state_name}_content", content)
+            return region, content
+
+        master_region, master_actions = _collapsible_review_group(
+            "マスター管理", "master_management"
+        )
+        ttk.Button(
+            master_actions,
+            text="マスターに設定",
+            command=self.set_latest_generated_as_master,
+            style="Accent.TButton",
+        ).pack(side="left")
+        ttk.Button(
+            master_actions,
+            text="外部画像をMasterに設定",
+            command=self.set_external_image_as_master
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            master_actions,
+            text="マスター画像を開く",
+            command=self.open_current_character_master_image
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            master_actions,
+            text="マスターと比較",
+            command=self.compare_master_to_latest_generated
+        ).pack(side="left", padx=(6, 0))
+
+        workflow_region, workflow_actions = _collapsible_review_group(
+            "その他", "other_actions"
+        )
 
         ttk.Label(
             workflow_actions,
-            text="次の作業:"
+            text="関連操作"
         ).pack(side="left")
 
         ttk.Button(
             workflow_actions,
-            text="Prompt保存",
+            text="プロンプト保存",
             command=self.save_current_prompt_from_generate
         ).pack(side="left", padx=(6, 0))
 
@@ -7077,11 +7499,20 @@ class App(tk.Tk):
             text="画像解析",
             command=self.open_image_review_for_latest
         ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            workflow_actions,
+            text="最新画像フォルダーを開く",
+            command=self.open_latest_generated_image_folder
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            workflow_actions,
+            text="Selfieへ送る",
+            command=self.send_latest_generated_to_selfie
+        ).pack(side="left", padx=(6, 0))
 
-        compare_state = ttk.LabelFrame(
-            latest_box, text="A/B比較", padding=6
+        compare_region, compare_state = _collapsible_review_group(
+            "画像比較", "image_comparison", before=workflow_region
         )
-        compare_state.pack(fill="x", pady=(8, 0))
 
         self.generate_compare_a_status = tk.StringVar(value="A: 未設定")
         self.generate_compare_b_status = tk.StringVar(value="B: 未設定")
@@ -7100,9 +7531,25 @@ class App(tk.Tk):
         compare_actions.pack(fill="x", pady=(6, 0))
         ttk.Button(
             compare_actions,
+            text="Aに設定",
+            command=lambda: self.set_latest_generated_compare_slot("A")
+        ).pack(side="left")
+        ttk.Button(
+            compare_actions,
+            text="Bに設定",
+            command=lambda: self.set_latest_generated_compare_slot("B")
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            compare_actions,
+            text="A/B比較を開く",
+            command=self.open_adopted_compare_viewer,
+            style="Accent.TButton",
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            compare_actions,
             text="Aを採用",
             command=lambda: self.adopt_compare_slot_from_generate("A")
-        ).pack(side="left")
+        ).pack(side="left", padx=(12, 0))
         ttk.Button(
             compare_actions,
             text="Bを採用",
@@ -7111,7 +7558,8 @@ class App(tk.Tk):
         ttk.Button(
             compare_actions,
             text="比較をクリア",
-            command=self.clear_generate_compare_slots
+            command=self.clear_generate_compare_slots,
+            style="Danger.TButton",
         ).pack(side="right")
 
         self._latest_generated_record = None
@@ -7428,6 +7876,8 @@ class App(tk.Tk):
         if hasattr(self, "current_project_summary"):
             self.current_project_summary.set(" / ".join(parts))
 
+        self.workflow_nav_var.set(self.workflow_nav_var.get())
+
         if hasattr(self, "workflow_project_var"):
             self.workflow_project_var.set(project_name or "未選択")
         if hasattr(self, "workflow_character_var"):
@@ -7436,6 +7886,17 @@ class App(tk.Tk):
             self.workflow_preset_var.set(preset_name)
         if hasattr(self, "workflow_prompt_var"):
             self.workflow_prompt_var.set(prompt_name or "未選択")
+
+        shiori_mode = character_name.strip().lower() == "shiori"
+        if hasattr(self, "workflow_nav_var"):
+            if shiori_mode:
+                self.workflow_nav_var.set(
+                    "Shioriモード: 生成 → 最新画像確認 → Master比較 → 画像レビュー → 採用状態設定 → セルフィーへ送信"
+                )
+            else:
+                self.workflow_nav_var.set(
+                    "制作フロー: Project → Character → Generate → 採用"
+                )
         if hasattr(self, "workflow_model_var"):
             # Forge model titles may contain a hash; keep the full value but
             # remove accidental leading/trailing whitespace.
@@ -7448,6 +7909,55 @@ class App(tk.Tk):
                 self.workflow_lora_var.set(f"{len(loras)}件 / {names}")
             else:
                 self.workflow_lora_var.set("0件")
+
+        unset_values = {"", "未選択"}
+        project_ready = project_name not in unset_values
+        character_ready = character_name not in unset_values
+        prompt_ready = bool(prompt_text)
+        model_ready = bool(model_name)
+        lora_ready = bool(loras)
+        if hasattr(self, "top_context_status_var"):
+            self.top_context_status_var.set(
+                f"Project: {project_name or '未選択'} / "
+                f"Character: {character_name or '未選択'} / "
+                f"Preset: {preset_name or '未選択'}"
+            )
+        if hasattr(self, "production_setup_summary_var"):
+            self.production_setup_summary_var.set(
+                f"Project: {project_name or '未選択'} / "
+                f"Character: {character_name or '未選択'} / "
+                f"Prompt: {prompt_name or '未選択'}"
+            )
+        if hasattr(self, "production_setup_model_var"):
+            self.production_setup_model_var.set(
+                f"Model: {model_name or '未選択'} / "
+                f"LoRA: {self.workflow_lora_var.get()}"
+            )
+        if hasattr(self, "production_setup_checks_var"):
+            checks = (
+                ("Project", project_ready),
+                ("Character", character_ready),
+                ("Prompt", prompt_ready),
+                ("Model", model_ready),
+                ("LoRA", lora_ready),
+            )
+            self.production_setup_checks_var.set(
+                "  ".join(
+                    f"{'✓' if ready else '×'} {label}"
+                    for label, ready in checks
+                )
+            )
+            if hasattr(self, "production_setup_checks_label"):
+                required_ready = project_ready and character_ready and model_ready
+                if all(ready for _label, ready in checks):
+                    summary_style = "SummaryReady.TLabel"
+                elif not required_ready:
+                    summary_style = "SummaryMissing.TLabel"
+                else:
+                    summary_style = "SummaryPartial.TLabel"
+                self.production_setup_checks_label.configure(
+                    style=summary_style
+                )
 
         if project_name in {"", "未選択"}:
             state = "○ Projectを選択"
@@ -7462,6 +7972,67 @@ class App(tk.Tk):
 
         if hasattr(self, "workflow_state_var"):
             self.workflow_state_var.set(state)
+        if hasattr(self, "production_flow_var"):
+            preparation_ready = (
+                project_name not in {"", "未選択"}
+                and character_name not in {"", "未選択"}
+            )
+            settings_ready = preparation_ready and bool(model_name) and bool(
+                prompt_text or loras
+            )
+            latest = getattr(self, "_latest_generated_record", None) or {}
+            generated = bool(latest.get("image_path"))
+            decision_done = (
+                str(latest.get("status") or "未評価") != "未評価"
+            )
+
+            completed = [
+                preparation_ready,
+                settings_ready,
+                generated,
+                decision_done,
+                decision_done,
+            ]
+            if not preparation_ready:
+                active_index = 0
+            elif not settings_ready:
+                active_index = 1
+            elif not generated:
+                active_index = 2
+            elif not decision_done:
+                active_index = 3
+            else:
+                active_index = 4
+            labels = (
+                "① 制作準備",
+                "② 生成設定",
+                "③ 生成",
+                "④ 確認・比較",
+                "⑤ 採否",
+            )
+            flow = []
+            for index, label in enumerate(labels):
+                mark = "✓" if completed[index] else (
+                    "●" if index == active_index else "○"
+                )
+                flow.append(f"{mark} {label}")
+            self.production_flow_var.set("  →  ".join(flow))
+            if hasattr(self, "production_flow_step_labels"):
+                step_names = ("制作準備", "生成設定", "生成", "確認・比較", "採否")
+                for index, (step_var, step_label) in enumerate(zip(
+                    self.production_flow_step_vars,
+                    self.production_flow_step_labels,
+                )):
+                    if completed[index]:
+                        mark, widget_style = "✓", "FlowDone.TLabel"
+                    elif index == active_index and index in (0, 1):
+                        mark, widget_style = "!", "FlowMissing.TLabel"
+                    elif index == active_index:
+                        mark, widget_style = "●", "FlowCurrent.TLabel"
+                    else:
+                        mark, widget_style = "○", "FlowPending.TLabel"
+                    step_var.set(f"{mark} {step_names[index]}")
+                    step_label.configure(style=widget_style)
 
     def _generate_snapshot(self):
         try:
@@ -9365,6 +9936,12 @@ class App(tk.Tk):
             if self.adopted_character_filter.get() not in character_choices:
                 self.adopted_character_filter.set("すべて")
 
+        if hasattr(self, "history_character_combo"):
+            history_character_choices = ["すべて"] + character_choices[1:]
+            self.history_character_combo["values"] = history_character_choices
+            if self.history_character_filter.get() not in history_character_choices:
+                self.history_character_filter.set("すべて")
+
         selected_project = (
             self.adopted_project_filter.get()
             if hasattr(self, "adopted_project_filter")
@@ -9564,6 +10141,7 @@ class App(tk.Tk):
         self.history_character_combo["values"] = values
         if self.history_character_filter.get() not in values:
             self.history_character_filter.set("すべて")
+
     def _history_character_name(self, character_id):
         if not character_id:
             return "未設定"
@@ -11009,14 +11587,23 @@ class App(tk.Tk):
     def api(self):
         return ForgeApi(self.setting_vars["forge_url"].get().strip())
 
-    def _bg(self, fn, success="完了"):
+    def _bg(self, fn, success="完了", on_success=None, on_error=None):
         def runner():
             try:
                 fn()
-                self.after(0, lambda: self.status.set(success))
+                def finish_success():
+                    self.status.set(success)
+                    if on_success:
+                        on_success()
+                self.after(0, finish_success)
             except Exception as e:
-                self.after(0, lambda: messagebox.showerror("エラー", str(e)))
-                self.after(0, lambda: self.status.set("エラー"))
+                error_text = str(e)
+                def finish_error():
+                    messagebox.showerror("エラー", error_text)
+                    self.status.set("エラー")
+                    if on_error:
+                        on_error()
+                self.after(0, finish_error)
         self.status.set("処理中…")
         threading.Thread(target=runner, daemon=True).start()
 
@@ -11577,6 +12164,15 @@ class App(tk.Tk):
                 child.destroy()
         if hasattr(self, "session_gallery_status"):
             self.session_gallery_status.set("このセッションの生成: 0枚")
+        if hasattr(self, "session_gallery_canvas"):
+            self.session_gallery_canvas.yview_moveto(0)
+
+    def _scroll_session_generation_gallery(self, event):
+        if not hasattr(self, "session_gallery_canvas"):
+            return
+        self.session_gallery_canvas.yview_scroll(
+            int(-1 * (event.delta / 120)), "units"
+        )
 
     def _session_record_is_adopted(self, record):
         path = str((record or {}).get("image_path") or "")
@@ -11621,13 +12217,20 @@ class App(tk.Tk):
         if not hasattr(self, "session_gallery"):
             return
 
+        gallery_scroll = 0.0
+        if hasattr(self, "session_gallery_canvas"):
+            try:
+                gallery_scroll = self.session_gallery_canvas.yview()[0]
+            except (IndexError, tk.TclError):
+                pass
+
         for child in self.session_gallery.winfo_children():
             child.destroy()
         self._session_gallery_refs = []
+        self._session_generation_buttons = []
 
         records = list(self._session_generation_records)
-        max_items = 12
-        shown = records[-max_items:]
+        shown = records
 
         for index, record in enumerate(shown):
             path = Path(record.get("image_path") or "")
@@ -11673,12 +12276,24 @@ class App(tk.Tk):
                 cell,
                 text=label,
                 command=lambda r=dict(record):
-                    self.select_session_generation_record(r)
+                    self.select_session_generation_record(r),
+                style=(
+                    "Selected.Thumbnail.TButton"
+                    if str(path) == self._session_selected_path
+                    else "Thumbnail.TButton"
+                ),
             )
             if image_ref is not None:
                 btn.configure(image=image_ref, compound="top")
                 self._session_gallery_refs.append(image_ref)
             btn.pack()
+            btn.bind(
+                "<MouseWheel>", self._scroll_session_generation_gallery
+            )
+            cell.bind(
+                "<MouseWheel>", self._scroll_session_generation_gallery
+            )
+            self._session_generation_buttons.append(btn)
 
         for col in range(4):
             self.session_gallery.columnconfigure(col, weight=1)
@@ -11692,7 +12307,17 @@ class App(tk.Tk):
                 text += f" / 選択: {selected_name}"
             self.session_gallery_status.set(text)
 
+        if hasattr(self, "session_gallery_canvas"):
+            self.session_gallery.update_idletasks()
+            self.session_gallery_canvas.configure(
+                scrollregion=self.session_gallery_canvas.bbox("all")
+            )
+            self.session_gallery_canvas.yview_moveto(gallery_scroll)
+
     def select_session_generation_record(self, record):
+        self._show_record_in_generate_detail(record, refresh_gallery=True)
+
+    def _show_record_in_generate_detail(self, record, refresh_gallery=True):
         if not record:
             return
         self._session_selected_path = str(record.get("image_path") or "")
@@ -11700,7 +12325,8 @@ class App(tk.Tk):
         path = Path(record.get("image_path") or "")
         if path.exists():
             self._show_preview(path)
-        self._render_session_generation_gallery()
+        if refresh_gallery:
+            self._render_session_generation_gallery()
 
     def remove_selected_session_generation(self):
         selected_path = str(getattr(self, "_session_selected_path", "") or "")
@@ -11711,6 +12337,20 @@ class App(tk.Tk):
             )
             return
 
+        page_scroll = 0.0
+        if hasattr(self, "generate_canvas"):
+            try:
+                page_scroll = self.generate_canvas.yview()[0]
+            except (IndexError, tk.TclError):
+                pass
+        removed_index = next(
+            (
+                index for index, record
+                in enumerate(self._session_generation_records)
+                if str(record.get("image_path") or "") == selected_path
+            ),
+            -1,
+        )
         before = len(self._session_generation_records)
         self._session_generation_records = [
             x for x in self._session_generation_records
@@ -11721,7 +12361,11 @@ class App(tk.Tk):
 
         # History / PNG / JSON are intentionally untouched.
         if self._session_generation_records:
-            next_record = self._session_generation_records[-1]
+            next_index = min(
+                max(removed_index, 0),
+                len(self._session_generation_records) - 1,
+            )
+            next_record = self._session_generation_records[next_index]
             self._session_selected_path = str(
                 next_record.get("image_path") or ""
             )
@@ -11744,6 +12388,12 @@ class App(tk.Tk):
             self.latest_generated_time.set("生成時刻: -")
 
         self._render_session_generation_gallery()
+        if hasattr(self, "generate_canvas"):
+            self.generate_canvas.yview_moveto(page_scroll)
+            self.after_idle(
+                lambda position=page_scroll:
+                    self.generate_canvas.yview_moveto(position)
+            )
         self.status.set(
             "セッション一覧から外しました。Historyと画像ファイルは削除していません。"
         )
@@ -11807,17 +12457,13 @@ class App(tk.Tk):
         self.latest_generated_time.set(
             f"生成時刻: {created_text or '-'}"
         )
+        self.latest_generated_status.set(
+            f"生成状態: {record.get('status') or '未評価'}"
+        )
+        self.latest_generated_status_choice.set(record.get('status') or '未評価')
+        self._refresh_latest_master_status()
+        self._refresh_generate_workflow_state()
 
-    def _show_record_in_generate_detail(self, record, refresh_gallery=True):
-        if not record:
-            return
-        self._session_selected_path = str(record.get("image_path") or "")
-        self._update_latest_generated_panel(record)
-        path = Path(record.get("image_path") or "")
-        if path.exists():
-            self._show_preview(path)
-        if refresh_gallery:
-            self._render_session_generation_gallery()
     def save_latest_generated_status(self):
         record = getattr(self, "_latest_generated_record", None)
         if not record:
@@ -11844,6 +12490,7 @@ class App(tk.Tk):
         self.status.set(f"最新生成画像の状態を保存しました: {selected_status}")
         self._refresh_generate_workflow_state()
         self.refresh_studio_history()
+
     def _ask_adopted_theme_and_version(self, default_name=""):
         dialog = tk.Toplevel(self)
         dialog.title("採用画像情報")
@@ -12082,6 +12729,7 @@ class App(tk.Tk):
             os.startfile(str(folder))
         except Exception as e:
             messagebox.showerror("Open Latest Image", f"フォルダーを開けませんでした。\n{e}")
+
     def _ask_review_goal(self):
         presets = [
             "全体レビュー",
@@ -12140,6 +12788,7 @@ class App(tk.Tk):
 
         self.wait_window(dialog)
         return result["value"]
+
     def send_latest_generated_to_selfie(self):
         record = getattr(self, "_latest_generated_record", None)
         if not record:
@@ -13047,6 +13696,7 @@ class App(tk.Tk):
                 "Contrast / Saturation / Brightnessは0以上の数値で指定してください。",
             )
             return None
+
     def refresh_color_correction_presets(self):
         if not hasattr(self, "color_correction_preset_combo"):
             return
@@ -13059,6 +13709,7 @@ class App(tk.Tk):
         self.color_correction_preset_combo["values"] = names
         if self.color_correction_preset_name.get() not in names:
             self.color_correction_preset_name.set("未選択")
+
     def save_current_color_correction_preset(self):
         settings = self._post_color_correction_settings(require_enabled=False)
         if settings is None:
@@ -13092,6 +13743,7 @@ class App(tk.Tk):
         self.refresh_color_correction_presets()
         self.color_correction_preset_name.set(name)
         self.status.set(f"色補正プリセットを保存しました: {name}")
+
     def apply_selected_color_correction_preset(self, _event=None):
         name = self.color_correction_preset_name.get().strip()
         if not name or name == "未選択":
@@ -13104,6 +13756,7 @@ class App(tk.Tk):
         self.post_color_saturation.set(item["saturation"])
         self.post_color_brightness.set(item["brightness"])
         self.status.set(f"色補正プリセットを読み込みました: {name}")
+
     def delete_selected_color_correction_preset(self):
         name = self.color_correction_preset_name.get().strip()
         records = dict(getattr(self, "_color_correction_preset_records", {}))
@@ -13134,6 +13787,7 @@ class App(tk.Tk):
         self.color_correction_preset_name.set("未選択")
         self.refresh_color_correction_presets()
         self.status.set(f"色補正プリセットを削除しました: {name}")
+
     def _save_post_color_corrected_copy(self, image_path, settings):
         if not settings:
             return None
@@ -13148,6 +13802,7 @@ class App(tk.Tk):
                 ),
             )
             return None
+
     def apply_color_correction_to_selected_image(self):
         selected_path = str(getattr(self, "_session_selected_path", "") or "")
         if not selected_path:
@@ -13210,6 +13865,37 @@ class App(tk.Tk):
                 )
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _set_generation_ui_state(self, state):
+        presentations = {
+            "idle": ("● 待機中", "GenerationIdle.TLabel"),
+            "running": ("● 生成中...", "GenerationRunning.TLabel"),
+            "complete": ("✓ 生成完了", "GenerationComplete.TLabel"),
+            "failed": ("! 生成失敗", "GenerationFailed.TLabel"),
+        }
+        text, style = presentations.get(state, presentations["idle"])
+        if hasattr(self, "generation_state_var"):
+            self.generation_state_var.set(text)
+        if hasattr(self, "generation_state_label"):
+            self.generation_state_label.configure(style=style)
+        if hasattr(self, "top_generate_status_var"):
+            self.top_generate_status_var.set(text)
+        if hasattr(self, "top_generate_status_label"):
+            self.top_generate_status_label.configure(style=style)
+
+        running = state == "running"
+        if hasattr(self, "single_generate_button"):
+            self.single_generate_button.configure(
+                state="disabled" if running else "normal"
+            )
+        if hasattr(self, "queue_generate_button"):
+            self.queue_generate_button.configure(
+                state="disabled" if running else "normal"
+            )
+        if hasattr(self, "stop_generation_button"):
+            self.stop_generation_button.configure(
+                state="normal" if running else "disabled"
+            )
 
     def stop_generation_queue(self):
         if not getattr(self, "_queue_running", False):
@@ -13310,9 +13996,11 @@ class App(tk.Tk):
         self._reset_session_generation_gallery()
         self.queue_status.set(f"キュー: 0 / {count}")
         self.status.set(f"連続生成を開始しました: {count}枚")
+        self._set_generation_ui_state("running")
 
         def worker():
             completed = 0
+            failed = False
             try:
                 api = self.api()
                 if selected_model:
@@ -13434,6 +14122,7 @@ class App(tk.Tk):
                         break
 
             except Exception as e:
+                failed = True
                 self.after(
                     0,
                     lambda err=str(e):
@@ -13449,12 +14138,18 @@ class App(tk.Tk):
                 def finish():
                     self._queue_running = False
                     self._queue_stop_requested = False
-                    if stopped:
+                    if failed:
+                        self.queue_status.set("キュー: 生成失敗")
+                        self._set_generation_ui_state("failed")
+                    elif stopped:
                         self.queue_status.set(
                             f"キュー: 停止 / {completed}枚完了"
                         )
                         self.status.set(
                             f"連続生成を停止しました。完了: {completed}枚"
+                        )
+                        self._set_generation_ui_state(
+                            "complete" if completed else "idle"
                         )
                     else:
                         self.queue_status.set(
@@ -13463,6 +14158,7 @@ class App(tk.Tk):
                         self.status.set(
                             f"連続生成が完了しました: {completed}枚"
                         )
+                        self._set_generation_ui_state("complete")
                     try:
                         self.refresh_home_dashboard()
                     except Exception:
@@ -13544,6 +14240,7 @@ class App(tk.Tk):
             # Optionally attach Master Reference to payload before calling Forge.
             augmented = self._attach_master_reference_to_payload(payload, api)
             if augmented is None:
+                # User-visible error already shown; abort generation.
                 return
             images, raw = api.txt2img(augmented)
             if not images:
@@ -13629,32 +14326,68 @@ class App(tk.Tk):
             except Exception:
                 pass
         if project_name_for_status:
-            self._bg(work, f"生成が完了しました / Project: {project_name_for_status}")
+            success_message = (
+                f"生成が完了しました / Project: {project_name_for_status}"
+            )
         else:
-            self._bg(work, "生成が完了しました / Project: 未設定")
+            success_message = "生成が完了しました / Project: 未設定"
+        self._set_generation_ui_state("running")
+        self._bg(
+            work,
+            success_message,
+            on_success=lambda: self._set_generation_ui_state("complete"),
+            on_error=lambda: self._set_generation_ui_state("failed"),
+        )
 
     def _show_preview(self, path: Path):
         try:
-            img = tk.PhotoImage(file=str(path))
-            w, h = img.width(), img.height()
-
-            # Tk PhotoImage supports integer subsampling. Use ceiling division
-            # so images slightly larger than the preview area are actually
-            # reduced instead of being clipped by the panel.
-            max_w, max_h = 480, 520
-            factor = preview_subsample_factor(
-                w, h, max_w, max_h
-            )
-            if factor > 1:
-                img = img.subsample(factor, factor)
-
-            self.current_preview = img
-            self.preview_label.configure(image=img, text="")
+            self._preview_source_image = tk.PhotoImage(file=str(path))
+            self._redraw_generate_preview()
         except Exception:
+            self._preview_source_image = None
             self.preview_label.configure(
                 image="",
                 text=f"生成完了\n{path}"
             )
+
+    def _schedule_generate_preview_redraw(self, _event=None):
+        pending = getattr(self, "_preview_resize_after_id", None)
+        if pending:
+            try:
+                self.after_cancel(pending)
+            except tk.TclError:
+                pass
+        self._preview_resize_after_id = self.after(
+            80, self._redraw_generate_preview
+        )
+
+    def _redraw_generate_preview(self):
+        self._preview_resize_after_id = None
+        source = getattr(self, "_preview_source_image", None)
+        if source is None or not hasattr(self, "preview_label"):
+            return
+
+        available_w = max(1, self.preview_label.winfo_width() - 16)
+        available_h = max(1, self.preview_label.winfo_height() - 16)
+        source_w = max(1, source.width())
+        source_h = max(1, source.height())
+        scale = min(
+            available_w / source_w,
+            available_h / source_h,
+            1.0,
+        )
+        ratio = Fraction(scale).limit_denominator(12)
+        if ratio.numerator == 0:
+            ratio = Fraction(1, max(1, round(1 / scale)))
+        if ratio.numerator == ratio.denominator:
+            display = source
+        else:
+            display = source.zoom(
+                ratio.numerator, ratio.numerator
+            ).subsample(ratio.denominator, ratio.denominator)
+
+        self.current_preview = display
+        self.preview_label.configure(image=display, text="")
 
     def refresh_history(self):
         root = Path(self.setting_vars["forge_root"].get().strip()) / "outputs"
