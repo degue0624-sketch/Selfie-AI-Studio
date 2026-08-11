@@ -8262,6 +8262,50 @@ class App(tk.Tk):
             self._autosave_current_project_session
         )
 
+    def _selected_generate_preset_id(self):
+        try:
+            name = self.generate_preset_name.get().strip()
+        except Exception:
+            return ""
+        if not name or name == "未選択":
+            return ""
+
+        item = getattr(self, "_generate_preset_records", {}).get(name)
+        if not item:
+            try:
+                item = next(
+                    (
+                        record for record in self.repo.list_items("presets")
+                        if (record.get("category") or "") == "generate"
+                        and (record.get("name") or "").strip() == name
+                    ),
+                    None,
+                )
+            except Exception:
+                item = None
+        return str((item or {}).get("id") or "")
+
+    def _restore_generate_preset_from_session(self, session):
+        preset_id = str(session.get("generate_preset_id") or "")
+        preset = None
+        if preset_id:
+            try:
+                candidate = self.repo.get_item("presets", preset_id)
+                if candidate and (candidate.get("category") or "") == "generate":
+                    preset = candidate
+            except Exception:
+                preset = None
+
+        preset_name = (preset or {}).get("name") or "未選択"
+        if hasattr(self, "generate_preset_name"):
+            self.generate_preset_name.set(preset_name)
+        self._refresh_generate_preset_update_button()
+
+        if not preset:
+            return False
+        self.apply_selected_generate_preset()
+        return True
+
     def _autosave_current_project_session(self):
         self._autosave_after_id = None
 
@@ -8290,6 +8334,7 @@ class App(tk.Tk):
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "character_id": getattr(self, "active_character_id", "") or "",
             "prompt_library_name": getattr(self, "_quick_active_prompt_name", "未選択"),
+            "generate_preset_id": self._selected_generate_preset_id(),
             "model": self.model_combo.get().strip() if hasattr(self, "model_combo") else "",
             "loras": loras,
             "prompt": prompt_text,
@@ -8502,6 +8547,7 @@ class App(tk.Tk):
             "saved_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
             "character_id": getattr(self, "active_character_id", "") or "",
             "prompt_library_name": getattr(self, "_quick_active_prompt_name", "未選択"),
+            "generate_preset_id": self._selected_generate_preset_id(),
             "model": self.model_combo.get().strip() if hasattr(self, "model_combo") else "",
             "loras": loras,
             "prompt": prompt_text,
@@ -8555,6 +8601,10 @@ class App(tk.Tk):
                     "このProjectには保存済み制作セッションがありません。"
                 )
             return False
+
+        # Restore the saved Generate preset first. Session fields below are
+        # intentionally applied last so Project-specific values always win.
+        self._restore_generate_preset_from_session(session)
 
         self.prompt.delete("1.0", "end")
         self.prompt.insert("1.0", session.get("prompt") or "")
@@ -8917,15 +8967,6 @@ class App(tk.Tk):
         )
         self.apply_generate_quick_setup()
 
-        preset_name = ""
-        try:
-            preset_name = self.generate_preset_name.get().strip()
-        except Exception:
-            pass
-
-        if preset_name and preset_name != "未選択":
-            self.apply_selected_generate_preset()
-
         session_restored = False
         current_project = self._current_project_item()
         if (
@@ -8938,6 +8979,16 @@ class App(tk.Tk):
             session_restored = self.restore_current_project_session(
                 show_messages=False
             )
+
+        # Projects without a saved session keep the existing one-click behavior.
+        if not session_restored:
+            preset_name = ""
+            try:
+                preset_name = self.generate_preset_name.get().strip()
+            except Exception:
+                pass
+            if preset_name and preset_name != "未選択":
+                self.apply_selected_generate_preset()
 
         self.refresh_production_check()
         self._refresh_generate_workflow_state()
