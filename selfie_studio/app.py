@@ -7716,7 +7716,10 @@ class App(tk.Tk):
 
         self.prompt.bind("<<Modified>>", self._generate_text_modified)
         self.negative.bind("<<Modified>>", self._generate_text_modified)
-        for var in (self.steps, self.cfg, self.width, self.height, self.sampler):
+        for var in (
+            self.steps, self.cfg, self.width, self.height,
+            self.sampler, self.scheduler, self.seed,
+        ):
             try:
                 var.trace_add("write", lambda *_: self._schedule_generate_dirty_check())
             except Exception:
@@ -8197,6 +8200,8 @@ class App(tk.Tk):
             "width": str(self.width.get()) if hasattr(self, "width") else "",
             "height": str(self.height.get()) if hasattr(self, "height") else "",
             "sampler": str(self.sampler.get()) if hasattr(self, "sampler") else "",
+            "scheduler": str(self.scheduler.get()) if hasattr(self, "scheduler") else "",
+            "seed": str(self.seed.get()) if hasattr(self, "seed") else "",
         }
         return snapshot
 
@@ -8285,6 +8290,8 @@ class App(tk.Tk):
             "prompt": prompt_text,
             "negative_prompt": negative_text,
             "sampler": self.sampler.get() if hasattr(self, "sampler") else "",
+            "scheduler": self.scheduler.get() if hasattr(self, "scheduler") else "Automatic",
+            "seed": self.seed.get() if hasattr(self, "seed") else "-1",
             "steps": self.steps.get() if hasattr(self, "steps") else "",
             "cfg": self.cfg.get() if hasattr(self, "cfg") else "",
             "width": self.width.get() if hasattr(self, "width") else "",
@@ -8342,6 +8349,8 @@ class App(tk.Tk):
                 "width": "Width",
                 "height": "Height",
                 "sampler": "Sampler",
+                "scheduler": "Scheduler",
+                "seed": "Seed",
             }
             changed_text = ", ".join(label_map.get(x, x) for x in changed)
             text = f"● 未保存: {changed_text}"
@@ -8493,6 +8502,8 @@ class App(tk.Tk):
             "prompt": prompt_text,
             "negative_prompt": negative_text,
             "sampler": self.sampler.get() if hasattr(self, "sampler") else "",
+            "scheduler": self.scheduler.get() if hasattr(self, "scheduler") else "Automatic",
+            "seed": self.seed.get() if hasattr(self, "seed") else "-1",
             "steps": self.steps.get() if hasattr(self, "steps") else "",
             "cfg": self.cfg.get() if hasattr(self, "cfg") else "",
             "width": self.width.get() if hasattr(self, "width") else "",
@@ -8521,22 +8532,24 @@ class App(tk.Tk):
             f"Project「{project.get('name','')}」の制作セッションを保存しました。"
         )
 
-    def restore_current_project_session(self):
+    def restore_current_project_session(self, show_messages=True):
         project = self._current_project_item()
         if not project:
-            messagebox.showinfo(
-                "制作セッション",
-                "復元するProjectが選択されていません。"
-            )
-            return
+            if show_messages:
+                messagebox.showinfo(
+                    "制作セッション",
+                    "復元するProjectが選択されていません。"
+                )
+            return False
 
         session = project.get("session") or {}
         if not session:
-            messagebox.showinfo(
-                "制作セッション",
-                "このProjectには保存済み制作セッションがありません。"
-            )
-            return
+            if show_messages:
+                messagebox.showinfo(
+                    "制作セッション",
+                    "このProjectには保存済み制作セッションがありません。"
+                )
+            return False
 
         self.prompt.delete("1.0", "end")
         self.prompt.insert("1.0", session.get("prompt") or "")
@@ -8577,38 +8590,66 @@ class App(tk.Tk):
             except Exception:
                 pass
 
+        scheduler = session.get("scheduler")
+        if scheduler not in ("", None):
+            try:
+                self.scheduler.set(str(scheduler))
+            except Exception:
+                pass
+
+        seed = session.get("seed")
+        if seed not in ("", None):
+            try:
+                self.seed.set(str(seed))
+            except Exception:
+                pass
+
         model = (session.get("model") or "").strip()
         if model:
             try:
                 values = list(self.model_combo["values"])
                 norm_model = self._char_normalize_model_name(model)
+                matched = False
                 for i, title in enumerate(values):
                     if title == model or self._char_normalize_model_name(title) == norm_model:
                         self.model_combo.current(i)
+                        matched = True
                         break
+                if not matched:
+                    self.model_combo.set(model)
             except Exception:
                 pass
 
         character_id = session.get("character_id") or ""
-        if character_id:
-            self.active_character_id = character_id
+        self.active_character_id = ""
 
         prompt_name = session.get("prompt_library_name") or "未選択"
         self._quick_active_project_name = project.get("name") or "未選択"
         self._quick_active_prompt_name = prompt_name
 
         char_name = "未選択"
-        if self.active_character_id:
-            char_item = self.repo.get_item("characters", self.active_character_id)
+        if character_id:
+            char_item = self.repo.get_item("characters", character_id)
             if char_item:
+                self.active_character_id = character_id
                 char_name = char_item.get("name") or "未選択"
         self._quick_active_character_name = char_name
 
+        try:
+            workspace = self.repo.workspace()
+            workspace["current_project_id"] = project.get("id") or None
+            workspace["active_project_id"] = project.get("id") or None
+            workspace["current_character_id"] = self.active_character_id or None
+            workspace["active_character_id"] = self.active_character_id or None
+            self.repo.save_all("workspace", workspace)
+        except Exception:
+            pass
+
         if hasattr(self, "quick_project"):
             self.quick_project.set(self._quick_active_project_name)
-        if hasattr(self, "quick_character") and char_name != "未選択":
+        if hasattr(self, "quick_character"):
             self.quick_character.set(char_name)
-        if hasattr(self, "quick_prompt") and prompt_name != "未選択":
+        if hasattr(self, "quick_prompt"):
             self.quick_prompt.set(prompt_name)
 
         if hasattr(self, "quick_active_summary"):
@@ -8628,6 +8669,7 @@ class App(tk.Tk):
             f"Project「{project.get('name','')}」の制作セッションを復元しました。"
             "生成は開始していません。"
         )
+        return True
 
     def _quick_project_selected(self, _event=None):
         project = self._quick_find_named_item("projects", self.quick_project.get())
@@ -8865,6 +8907,9 @@ class App(tk.Tk):
     def start_production_prepare(self):
         # Existing one-click application already owns the safe apply order:
         # Character defaults -> Project/workspace -> explicit Prompt.
+        selected_project = self._quick_find_named_item(
+            "projects", self.quick_project.get()
+        )
         self.apply_generate_quick_setup()
 
         preset_name = ""
@@ -8876,6 +8921,19 @@ class App(tk.Tk):
         if preset_name and preset_name != "未選択":
             self.apply_selected_generate_preset()
 
+        session_restored = False
+        current_project = self._current_project_item()
+        if (
+            selected_project
+            and current_project
+            and str(current_project.get("id") or "")
+            == str(selected_project.get("id") or "")
+            and current_project.get("session")
+        ):
+            session_restored = self.restore_current_project_session(
+                show_messages=False
+            )
+
         self.refresh_production_check()
         self._refresh_generate_workflow_state()
 
@@ -8886,13 +8944,18 @@ class App(tk.Tk):
         )
 
         if hard_missing:
+            prefix = "制作セッションを復元しましたが、" if session_restored else ""
             self.status.set(
-                "制作準備に不足があります: "
+                prefix + "制作準備に不足があります: "
                 + ", ".join(hard_missing)
                 + "。生成は開始していません。"
             )
         else:
-            msg = "制作準備が完了しました。生成は開始していません。"
+            msg = (
+                "Projectの制作セッションを復元しました。生成は開始していません。"
+                if session_restored
+                else "制作準備が完了しました。生成は開始していません。"
+            )
             if optional_missing:
                 msg += " 任意項目未設定: " + ", ".join(optional_missing)
             self.status.set(msg)
