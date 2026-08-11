@@ -2,6 +2,25 @@
 
 Pinokio版 Stable Diffusion WebUI Forge を前提にした初期実用テスト版です。
 
+## 現在の主要機能
+- Shiori Themeを基盤にしたUI Theme切替と設定保存
+- UI Font切替（Current / Default、Yu Gothic UI、Meiryo UI）と未検出時のDefaultフォールバック
+- Generate画面の制作準備サマリー、5工程ステータス、生成状態表示、詳細設定のインライン展開
+- Previewとセッション生成画像一覧の独立表示・スクロール
+- Generateプリセットの保存・読込・更新
+  - Seed / Scheduler / Positive Prompt / Negative Promptを含む
+- CharacterのMaster Referenceを単枚生成・連続生成へ適用
+- Contrast / Saturation / BrightnessによるPost Color Correction
+  - 元画像を上書きせず、`_color`、`_color_2`のような別ファイルへ保存
+  - 色補正プリセットの保存・読込・削除
+  - Pillowが利用できない環境では色補正だけを中止し、Studio本体は継続
+- 最新生成画像とMasterの比較、A/B比較
+- HistoryのCharacter・制作状態による管理、生成設定の復元
+- 評価・採否の保存、採用DBへのメタデータ登録
+- 最新生成内容をレビュー用Markdownとしてクリップボードへ送るSend to Selfie
+
+画像生成はGenerate画面で明示的に実行した場合だけ開始します。
+
 ## v1.2.3 モデル確認の自動化
 - Project / Character適用時、Forgeモデル一覧が未取得なら自動で静かに取得
 - 自動取得に成功した場合は「モデル未確認」確認を省略して、そのまま照合
@@ -252,12 +271,16 @@ Pinokio版 Stable Diffusion WebUI Forge を前提にした初期実用テスト�
 - 外部ライブラリ不要（Python標準ライブラリのみ）
 
 ## 重要
-v0.3でもNAS内ファイルを移動・削除・上書きしません。
+NAS内ファイルを自動で移動・削除・上書きしません。
 NAS→Forgeへの自動コピーはまだ無効です。
 モデル管理の安全性を実機確認した後に追加します。
 
 ## 起動
-`Start_Selfie_AI_Studio.cmd` をダブルクリックしてください。
+`Start_Selfie_AI_Studio.vbs` をダブルクリックしてください。
+
+コマンドプロンプトを表示せずに既存の `main.py` を起動し、起動ログを `startup.log` に保存します。
+
+`Start_Selfie_AI_Studio.cmd`、`start_windows.bat`、`Start_Diagnostic.cmd` は互換性維持のためそのまま残しています。
 
 起動できない場合は、Pythonの確認をこちらと一緒に行います。
 
@@ -273,8 +296,5 @@ Forgeが起動しているのに「未接続」になる場合、Forge側でAPI�
 
 ## 次の予定
 - NAS→Forgeモデルの安全なワンクリック配置
-- お気に入り
 - モデルカード/サムネイル
-- LoRA管理
-- プロジェクト/採用管理
 - サブPC生成サーバー対応
