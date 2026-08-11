@@ -60,3 +60,12 @@ local_settings.json
 
 # Forge runtime diagnostics
 /script_info.json
+
+# Local development notes and unused launcher experiment
+/main.pyw
+/STEP57_SEND_TO_SELFIE.txt
+/STEP58_SEND_TO_SELFIE_REVIEW.txt
+/STEP59_REVIEW_WORKFLOW.md
+/STEP61_PRODUCTION_STATUS.md
+/STEP62_FINAL.md
+/STEP63_FINISH.md
