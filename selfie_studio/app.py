@@ -145,6 +145,7 @@ class App(tk.Tk):
         header.pack(fill="x")
         ttk.Label(header, text="Selfie AI Studio", font=("", 18, "bold")).pack(side="left")
         self.connection_var = tk.StringVar(value="Forge: 確認中")
+        self._forge_connection_status_revision = 0
         ttk.Label(header, textvariable=self.connection_var).pack(side="right")
         self.ui_theme_combo = ttk.Combobox(
             header,
@@ -11951,15 +11952,26 @@ class App(tk.Tk):
     def api(self):
         return ForgeApi(self.setting_vars["forge_url"].get().strip())
 
-    def _set_forge_connection_status(self, state):
+    def _set_forge_connection_status(self, state, expected_revision=None):
         labels = {
             "checking": "Forge: 確認中",
             "connected": "Forge: 接続中",
             "disconnected": "Forge: 未接続",
             "error": "Forge: エラー",
         }
+        current_revision = getattr(
+            self, "_forge_connection_status_revision", 0
+        )
+        if (
+            expected_revision is not None
+            and current_revision != expected_revision
+        ):
+            return False
         if hasattr(self, "connection_var"):
             self.connection_var.set(labels.get(state, labels["error"]))
+            self._forge_connection_status_revision = current_revision + 1
+            return True
+        return False
 
     def _bg(self, fn, success="完了", on_success=None, on_error=None):
         def runner():
@@ -11989,6 +12001,7 @@ class App(tk.Tk):
 
     def run_diagnostics(self):
         self._set_forge_connection_status("checking")
+        diagnostic_revision = self._forge_connection_status_revision
 
         def work():
             root = Path(self.setting_vars["forge_root"].get().strip())
@@ -12028,14 +12041,20 @@ class App(tk.Tk):
                 lines.append(f"現在モデル: {model}")
                 self.after(
                     0,
-                    lambda: self._set_forge_connection_status("connected"),
+                    lambda revision=diagnostic_revision:
+                    self._set_forge_connection_status(
+                        "connected", expected_revision=revision
+                    ),
                 )
             except Exception:
                 lines.append(f"\nForge API: 未接続  {s.forge_url}")
                 lines.append("Forgeが停止中、またはAPIが有効でない可能性があります。")
                 self.after(
                     0,
-                    lambda: self._set_forge_connection_status("disconnected"),
+                    lambda revision=diagnostic_revision:
+                    self._set_forge_connection_status(
+                        "disconnected", expected_revision=revision
+                    ),
                 )
 
             self.after(0, lambda: self._diag_set("\n".join(lines)))
