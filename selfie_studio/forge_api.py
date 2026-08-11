@@ -48,6 +48,15 @@ class ForgeApi:
             return []
         return [x.get("name", "") for x in data if isinstance(x, dict) and x.get("name")]
 
+    def script_info(self) -> list[dict[str, Any]]:
+        """Return script info (the /sdapi/v1/script-info response).
+
+        Used by clients to discover available always-on scripts and their
+        argument schema so callers can populate `alwayson_scripts` safely.
+        """
+        data = self._request("/sdapi/v1/script-info")
+        return data if isinstance(data, list) else []
+
     def refresh_checkpoints(self) -> None:
         self._request("/sdapi/v1/refresh-checkpoints", method="POST", payload={})
 

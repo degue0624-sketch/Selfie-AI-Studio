@@ -1,4 +1,5 @@
 from __future__ import annotations
+import base64
 
 import struct
 import zlib
@@ -5459,6 +5460,12 @@ class App(tk.Tk):
             except Exception:
                 return None
 
+        master_refs = []
+        if self._char_selected_id:
+            old_item = self.repo.get_item("characters", self._char_selected_id)
+            if old_item:
+                master_refs = old_item.get("master_refs") or []
+
         item = {
             "id": self._char_selected_id or "",
             "name": name,
@@ -5475,7 +5482,7 @@ class App(tk.Tk):
             },
             "favorite": favorite,
             "notes": notes,
-            "master_refs": [],
+            "master_refs": master_refs,
         }
 
         saved = self.repo.upsert_item("characters", item)
@@ -11908,6 +11915,574 @@ class App(tk.Tk):
                 f"B: {self._compare_label(b)}"
             )
 
+    def _get_active_character_item(self):
+        character_id = getattr(self, "active_character_id", "") or ""
+        if not character_id:
+            return None
+        return self.repo.get_item("characters", character_id)
+
+    def _get_active_character_master(self):
+        character = self._get_active_character_item()
+        if not character:
+            return None
+
+        refs = character.get("master_refs") or []
+        if not isinstance(refs, list):
+            return None
+
+        preferred = None
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            if ref.get("master_type") == "正面":
+                return ref
+            if preferred is None:
+                preferred = ref
+        return preferred
+
+    def _attach_master_reference_to_payload(self, payload: dict, api: ForgeApi) -> dict | None:
+        """If Master Reference is enabled, augment `payload` with the
+        appropriate `alwayson_scripts` entry for the IP-Adapter script.
+
+        Returns the modified payload, or None if generation should be aborted
+        (e.g. master missing or script not available).
+        This uses live script metadata from Forge via `api.script_info()` to
+        build a matching `args` array without hard-coding argument positions.
+        """
+        if not getattr(self, 'master_reference_var', None) or not self.master_reference_var.get():
+            return payload
+
+        master = self._get_active_character_master()
+        if not master or not master.get("image_path"):
+            messagebox.showerror("Master Reference", "Master画像が設定されていません。生成を中止します。")
+            return None
+
+        master_path = Path(str(master.get("image_path") or ""))
+        if not master_path.exists():
+            messagebox.showerror("Master Reference", f"Master画像が見つかりません。\n{master_path}")
+            return None
+
+        # Read image and prepare data URI
+        try:
+            img_bytes = master_path.read_bytes()
+            b64 = base64.b64encode(img_bytes).decode('ascii')
+            data_uri = f"data:image/png;base64,{b64}"
+        except Exception as e:
+            messagebox.showerror("Master Reference", f"Master画像の読み込みに失敗しました。\n{e}")
+            return None
+
+        # Retrieve script-info from Forge and locate the Integrated ControlNet script.
+        try:
+            scripts = api.script_info() or []
+        except Exception:
+            messagebox.showerror("Master Reference", "Forgeからスクリプト情報を取得できませんでした。")
+            return None
+
+        ip_script = None
+        for s in scripts:
+            name = (s.get('name') or '')
+            if not name:
+                continue
+            low = name.lower()
+            if (
+                low == 'controlnet'
+                and s.get('is_alwayson')
+                and not s.get('is_img2img')
+            ):
+                ip_script = s
+                break
+
+        if not ip_script:
+            messagebox.showerror(
+                "Master Reference",
+                "Integrated ControlNetスクリプトが見つかりません。Forgeの/script-infoでスクリプト名を確認してください。"
+            )
+            return None
+
+        args_template = ip_script.get('args') or []
+        if not isinstance(args_template, list) or len(args_template) == 0:
+            messagebox.showerror(
+                "Master Reference",
+                "Integrated ControlNetスクリプトの引数情報が不十分です。生成を中止します。"
+            )
+            return None
+
+        # Current Forge exposes ControlNet units as unlabeled dictionaries.
+        first_arg = args_template[0]
+        first_value = first_arg.get('value') if isinstance(first_arg, dict) else None
+        master_reference_mode = 'reference_adain+attn'
+        required_unit_fields = {
+            'enabled', 'module', 'model', 'weight', 'image', 'resize_mode',
+            'threshold_a', 'guidance_start', 'guidance_end',
+        }
+        missing_unit_fields = sorted(
+            required_unit_fields - set(first_value)
+        ) if isinstance(first_value, dict) else sorted(required_unit_fields)
+        if missing_unit_fields:
+            messagebox.showerror(
+                "Master Reference",
+                "ControlNet Unitの必須項目を取得できませんでした: "
+                + ", ".join(missing_unit_fields)
+            )
+            return None
+
+        if isinstance(first_value, dict):
+            unit = dict(first_value)
+            if master_reference_mode == 'reference_adain+attn':
+                unit.update({
+                    'enabled': True,
+                    'module': 'reference_adain+attn',
+                    'model': 'None',
+                    'weight': float(self.master_reference_strength.get()),
+                    'image': data_uri,
+                    'resize_mode': 'Crop and Resize',
+                    'processor_res': 0.5,
+                    'threshold_a': 0.8,
+                    'threshold_b': 0.5,
+                    'guidance_start': 0.0,
+                    'guidance_end': 1.0,
+                })
+            else:
+                # Retained for a future UI/config switch back to IP-Adapter.
+                unit.update({
+                    'enabled': True,
+                    'module': 'InsightFace+CLIP-H (IPAdapter)',
+                    'model': 'ip-adapter-plus-face_sdxl_vit-h [368cf551]',
+                    'weight': float(self.master_reference_strength.get()),
+                    'image': data_uri,
+                    'resize_mode': 'Crop and Resize',
+                    'guidance_start': 0.0,
+                    'guidance_end': 1.0,
+                })
+            args = [unit] + [arg.get('value') for arg in args_template[1:]]
+            alwayson = dict(payload.get('alwayson_scripts') or {})
+            alwayson[ip_script.get('name')] = {'args': args}
+            payload['alwayson_scripts'] = alwayson
+            return payload
+
+        # Required logical fields we must be able to map from script args.
+        required_keys = {
+            'image': ['image', 'img', 'input', 'reference'],
+            'model': ['model'],
+            'preprocessor': ['preprocessor', 'processor'],
+            'weight': ['weight', 'strength'],
+            'resize': ['resize'],
+            'start': ['start'],
+            'end': ['end'],
+        }
+
+        # Build a mapping from role -> index in args_template.
+        label_map = {}
+        for idx, arg in enumerate(args_template):
+            lbl = (arg.get('label') or '')
+            low_lbl = lbl.lower()
+            for role, keywords in required_keys.items():
+                if role in label_map:
+                    continue
+                for kw in keywords:
+                    if kw in low_lbl:
+                        label_map[role] = idx
+                        break
+
+        missing = [k for k in required_keys.keys() if k not in label_map]
+        if missing:
+            messagebox.showerror(
+                "Master Reference",
+                f"Integrated ControlNetスクリプトの引数から必須フィールドを特定できませんでした: {', '.join(missing)}。生成を中止します。"
+            )
+            return None
+
+        # Now construct args array preserving original length/order.
+        args = []
+        for idx, arg in enumerate(args_template):
+            # default fallback to existing default value
+            default = arg.get('value')
+            if idx == label_map['image']:
+                args.append(data_uri)
+            elif idx == label_map['model']:
+                args.append('ip-adapter-plus-face_sdxl_vit-h [368cf551]')
+            elif idx == label_map['preprocessor']:
+                args.append('InsightFace+CLIP-H (IPAdapter)')
+            elif idx == label_map['weight']:
+                try:
+                    args.append(float(self.master_reference_strength.get()))
+                except Exception:
+                    args.append(0.8)
+            elif idx == label_map['resize']:
+                args.append('Crop and Resize')
+            elif idx == label_map['start']:
+                args.append(0.0)
+            elif idx == label_map['end']:
+                args.append(1.0)
+            else:
+                args.append(default)
+
+        alwayson = dict(payload.get('alwayson_scripts') or {})
+        alwayson[ip_script.get('name')] = {'args': args}
+        payload['alwayson_scripts'] = alwayson
+        return payload
+
+    def _refresh_latest_master_status(self):
+        master = self._get_active_character_master()
+        if not hasattr(self, "latest_master_status"):
+            return
+
+        if master and master.get("image_path"):
+            image_path = Path(str(master.get("image_path") or ""))
+            name = image_path.name or ""
+            master_type = master.get("master_type") or "Master"
+            if name:
+                self.latest_master_status.set(
+                    f"Master: {master_type} / {name}"
+                )
+            else:
+                self.latest_master_status.set(f"Master: {master_type}")
+        else:
+            self.latest_master_status.set("Master: 未設定")
+
+    def _ask_master_type(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Master種別選択")
+        dialog.transient(self)
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="この生成画像をどのMaster種別として保存しますか？").pack(anchor="w")
+        master_type_var = tk.StringVar(value="正面")
+        ttk.Combobox(
+            frame,
+            textvariable=master_type_var,
+            state="readonly",
+            values=("正面", "横顔", "全身", "その他"),
+            width=14,
+        ).pack(fill="x", pady=(8, 0))
+
+        result = {"value": None}
+
+        def on_ok():
+            result["value"] = master_type_var.get().strip()
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill="x", pady=(12, 0))
+        ttk.Button(button_frame, text="OK", command=on_ok).pack(side="right")
+        ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side="right", padx=(6, 0))
+
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+        dialog.wait_visibility()
+        dialog.lift()
+        dialog.focus_force()
+        dialog.grab_set()
+        self.wait_window(dialog)
+        return result["value"]
+
+    def set_latest_generated_as_master(self):
+        record = getattr(self, "_latest_generated_record", None)
+        if not record:
+            messagebox.showinfo("Master", "保存する生成画像がありません。")
+            return
+
+        character = self._get_active_character_item()
+        if not character:
+            messagebox.showinfo(
+                "Master",
+                "現在アクティブなCharacterがありません。Characterを選択してから再試行してください。"
+            )
+            return
+
+        master_type = self._ask_master_type()
+        if not master_type:
+            return
+
+        image_path = Path(record.get("image_path") or "")
+        if not image_path.exists():
+            messagebox.showwarning(
+                "Master",
+                f"マスターに設定する画像ファイルが見つかりません。\n\n{image_path}"
+            )
+            return
+
+        master_path = str(image_path.resolve())
+        refs = [x for x in (character.get("master_refs") or []) if x.get("master_type") != master_type]
+        refs.append({
+            "image_path": master_path,
+            "master_type": master_type,
+            "name": image_path.name,
+            "source_history_id": record.get("id") or "",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+
+        updated = dict(character)
+        updated["master_refs"] = refs
+        self.repo.upsert_item("characters", updated)
+        self._refresh_latest_master_status()
+        self.status.set(f"{master_type}マスターを保存しました: {image_path.name}")
+
+    def set_external_image_as_master(self):
+        character = self._get_active_character_item()
+        if not character:
+            messagebox.showinfo(
+                "Master",
+                "現在アクティブなCharacterがありません。Characterを選択してから再試行してください。"
+            )
+            return
+
+        selected = filedialog.askopenfilename(
+            parent=self,
+            title="Master画像を選択",
+            filetypes=(
+                ("画像ファイル", "*.png *.jpg *.jpeg"),
+                ("PNG", "*.png"),
+                ("JPEG", "*.jpg *.jpeg"),
+            ),
+        )
+        if not selected:
+            return
+
+        image_path = Path(selected)
+        if not image_path.is_file() or image_path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            messagebox.showwarning("Master", "PNG / JPG / JPEG画像を選択してください。")
+            return
+
+        master_type = self._ask_master_type()
+        if not master_type:
+            return
+
+        refs = list(character.get("master_refs") or [])
+        existing = next(
+            (x for x in refs if x.get("master_type") == master_type),
+            None,
+        )
+        if existing and not messagebox.askyesno(
+            "Master上書き確認",
+            f"{master_type}Masterは既に設定されています。\n\n"
+            f"{existing.get('image_path') or ''}\n\n上書きしますか？",
+        ):
+            return
+
+        refs = [x for x in refs if x.get("master_type") != master_type]
+        refs.append({
+            "image_path": str(image_path.resolve()),
+            "master_type": master_type,
+            "name": image_path.name,
+            "source_history_id": "",
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        })
+
+        updated = dict(character)
+        updated["master_refs"] = refs
+        self.repo.upsert_item("characters", updated)
+        self._refresh_latest_master_status()
+        self.status.set(f"外部画像を{master_type}Masterに設定しました: {image_path.name}")
+
+    def open_current_character_master_image(self):
+        master = self._get_active_character_master()
+        if not master or not master.get("image_path"):
+            messagebox.showinfo("Master", "現在のCharacterに設定されたMaster画像がありません。")
+            return
+
+        master_path = Path(master.get("image_path") or "")
+        if not master_path.exists():
+            messagebox.showwarning(
+                "Master",
+                f"Master画像が見つかりません。\n\n{master_path}"
+            )
+            return
+
+        try:
+            os.startfile(str(master_path))
+        except Exception as e:
+            messagebox.showerror(
+                "Master",
+                f"Master画像を開けませんでした。\n{e}"
+            )
+
+    def compare_master_to_latest_generated(self):
+        master = self._get_active_character_master()
+        if not master or not master.get("image_path"):
+            messagebox.showinfo("Master", "現在のCharacterに設定されたMaster画像がありません。")
+            return
+
+        record = getattr(self, "_latest_generated_record", None)
+        if not record:
+            messagebox.showinfo("Master", "比較する最新生成画像がありません。")
+            return
+
+        current_path = Path(record.get("image_path") or "")
+        master_path = Path(master.get("image_path") or "")
+        if not master_path.exists():
+            messagebox.showwarning(
+                "Master",
+                f"Master画像が見つかりません。\n\n{master_path}"
+            )
+            return
+        if not current_path.exists():
+            messagebox.showwarning(
+                "Master",
+                f"最新生成画像が見つかりません。\n\n{current_path}"
+            )
+            return
+
+        self._open_image_compare_viewer(
+            master_path,
+            current_path,
+            f"Master: {master.get('master_type') or 'Master'}",
+            "Latest Generated"
+        )
+
+    def _open_image_compare_viewer(self, path_a, path_b, title_a, title_b):
+        try:
+            orig_a = tk.PhotoImage(file=str(path_a))
+            orig_b = tk.PhotoImage(file=str(path_b))
+        except Exception as e:
+            messagebox.showerror(
+                "比較ビューア",
+                f"画像を読み込めませんでした。\n{e}"
+            )
+            return
+
+        win = tk.Toplevel(self)
+        win.title("Master / Current 比較")
+        win.geometry("1450x820")
+        win.transient(self)
+
+        toolbar = ttk.Frame(win, padding=(8, 8, 8, 4))
+        toolbar.pack(fill="x")
+
+        zoom_var = tk.StringVar(value="Fit")
+        sync_var = tk.BooleanVar(value=True)
+
+        ttk.Label(toolbar, textvariable=zoom_var, width=12).pack(side="left")
+        ttk.Button(toolbar, text="Fit", command=lambda: _draw_all(fit=True)).pack(side="left", padx=(0, 4))
+        for p in (25, 50, 100, 200, 400):
+            ttk.Button(
+                toolbar,
+                text=f"{p}%",
+                command=lambda value=p: _draw_all(percent=value)
+            ).pack(side="left", padx=(0, 4))
+
+        ttk.Checkbutton(
+            toolbar,
+            text="同期ズーム",
+            variable=sync_var
+        ).pack(side="left", padx=(12, 0))
+
+        ttk.Label(
+            toolbar,
+            text="ホイール: ズーム / 左ドラッグ: 移動"
+        ).pack(side="left", padx=(12, 0))
+
+        ttk.Button(toolbar, text="閉じる", command=win.destroy).pack(side="right")
+
+        pane = ttk.Panedwindow(win, orient="horizontal")
+        pane.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+
+        left_box = ttk.LabelFrame(
+            pane, text=title_a, padding=4
+        )
+        right_box = ttk.LabelFrame(
+            pane, text=title_b, padding=4
+        )
+        pane.add(left_box, weight=1)
+        pane.add(right_box, weight=1)
+
+        canvas_a = tk.Canvas(left_box, bg="black")
+        canvas_b = tk.Canvas(right_box, bg="black")
+        canvas_a.pack(fill="both", expand=True)
+        canvas_b.pack(fill="both", expand=True)
+
+        display = {"a": None, "b": None}
+        state = {
+            "percent": 100,
+            "fit_mode": True,
+        }
+        zoom_steps = [25, 50, 100, 200, 400]
+
+        def draw_one(canvas, image, key, percent):
+            if image is None:
+                return
+            if percent != 100:
+                display[key] = image.subsample(max(1, int(100 / percent)), max(1, int(100 / percent)))
+            else:
+                display[key] = image
+            canvas.delete("all")
+            canvas.create_image(
+                0,
+                0,
+                image=display[key],
+                anchor="nw"
+            )
+            canvas.config(scrollregion=canvas.bbox("all"))
+
+        def fit_percent_for(src_img, canvas):
+            cw = max(1, canvas.winfo_width() - 30)
+            ch = max(1, canvas.winfo_height() - 30)
+            ow = max(1, src_img.width())
+            oh = max(1, src_img.height())
+            candidates = [
+                p for p in zoom_steps
+                if ow * p / 100 <= cw and oh * p / 100 <= ch
+            ]
+            return max(candidates) if candidates else 25
+
+        def _draw_all(percent=None, fit=False):
+            win.update_idletasks()
+            if fit:
+                pa = fit_percent_for(orig_a, canvas_a)
+                pb = fit_percent_for(orig_b, canvas_b)
+                percent = min(pa, pb) if sync_var.get() else None
+                state["fit_mode"] = True
+            else:
+                state["fit_mode"] = False
+
+            if sync_var.get():
+                p = percent if percent is not None else state["percent"]
+                state["percent"] = p
+                draw_one(canvas_a, orig_a, "a", p)
+                draw_one(canvas_b, orig_b, "b", p)
+                zoom_var.set(f"Fit ({p}%)" if fit else f"{p}%")
+            else:
+                if fit:
+                    pa = fit_percent_for(orig_a, canvas_a)
+                    pb = fit_percent_for(orig_b, canvas_b)
+                    draw_one(canvas_a, orig_a, "a", pa)
+                    draw_one(canvas_b, orig_b, "b", pb)
+                    zoom_var.set(f"Fit (A:{pa}% / B:{pb}%)")
+                else:
+                    p = percent if percent is not None else state["percent"]
+                    state["percent"] = p
+                    draw_one(canvas_a, orig_a, "a", p)
+                    draw_one(canvas_b, orig_b, "b", p)
+                    zoom_var.set(f"{p}%")
+
+        def next_zoom(current, direction):
+            if direction > 0:
+                larger = [p for p in zoom_steps if p > current]
+                return min(larger) if larger else zoom_steps[-1]
+            smaller = [p for p in zoom_steps if p < current]
+            return max(smaller) if smaller else zoom_steps[0]
+
+        def wheel(event):
+            target = next_zoom(state["percent"], 1 if event.delta > 0 else -1)
+            _draw_all(percent=target)
+
+        def pan_start(event):
+            event.widget.scan_mark(event.x, event.y)
+
+        def pan_move(event):
+            event.widget.scan_dragto(event.x, event.y, gain=1)
+
+        for canvas in (canvas_a, canvas_b):
+            canvas.bind("<MouseWheel>", wheel)
+            canvas.bind("<ButtonPress-1>", pan_start)
+            canvas.bind("<B1-Motion>", pan_move)
+
+        win.after(100, lambda: _draw_all(fit=True))
+
     def clear_generate_compare_slots(self):
         self._adopted_compare_a = None
         self._adopted_compare_b = None
@@ -12155,7 +12730,11 @@ class App(tk.Tk):
                             self.queue_status.set(f"キュー: {i} / {n} 生成中")
                     )
 
-                    images, raw = api.txt2img(dict(payload))
+                    # Optionally attach Master Reference for each queued item.
+                    augmented = self._attach_master_reference_to_payload(dict(payload), api)
+                    if augmented is None:
+                        return
+                    images, raw = api.txt2img(augmented)
                     if not images:
                         raise ForgeApiError("画像が返りませんでした。")
 
@@ -12360,7 +12939,11 @@ class App(tk.Tk):
             api = self.api()
             if selected_model:
                 api.set_model(selected_model)
-            images, raw = api.txt2img(payload)
+            # Optionally attach Master Reference to payload before calling Forge.
+            augmented = self._attach_master_reference_to_payload(payload, api)
+            if augmented is None:
+                return
+            images, raw = api.txt2img(augmented)
             if not images:
                 raise ForgeApiError("画像が返りませんでした。")
 
