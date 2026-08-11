@@ -12917,9 +12917,9 @@ class App(tk.Tk):
 
     def _ask_adopted_theme_and_version(self, default_name=""):
         dialog = tk.Toplevel(self)
+        dialog.withdraw()
         dialog.title("採用画像情報")
         dialog.transient(self)
-        dialog.grab_set()
 
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill="both", expand=True)
@@ -12946,8 +12946,42 @@ class App(tk.Tk):
 
         button_frame = ttk.Frame(frame)
         button_frame.pack(fill="x", pady=(12, 0))
-        ttk.Button(button_frame, text="レビュー開始", command=on_ok).pack(side="right")
+        ttk.Button(
+            button_frame, text="採用して続ける", command=on_ok
+        ).pack(side="right")
         ttk.Button(button_frame, text="キャンセル", command=on_cancel).pack(side="right", padx=(6, 0))
+
+        dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+        dialog.bind("<Escape>", lambda _event: on_cancel())
+        dialog.bind("<Return>", lambda _event: on_ok())
+
+        dialog.update_idletasks()
+        width = dialog.winfo_reqwidth()
+        height = dialog.winfo_reqheight()
+        x = self.winfo_rootx() + (self.winfo_width() - width) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - height) // 2
+        x = max(0, min(x, dialog.winfo_screenwidth() - width))
+        y = max(0, min(y, dialog.winfo_screenheight() - height))
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+        dialog.deiconify()
+        dialog.lift()
+        dialog.attributes("-topmost", True)
+        dialog.after_idle(lambda: dialog.attributes("-topmost", False))
+        theme_entry.focus_force()
+        dialog.grab_set()
+        dialog.update()
+
+        # Windows may reposition a transient window while applying focus.
+        # Center once more after that native window-manager step completes.
+        match = re.search(r"([+-]\d+)([+-]\d+)$", dialog.geometry())
+        if match:
+            frame_x = dialog.winfo_rootx() - int(match.group(1))
+            frame_y = dialog.winfo_rooty() - int(match.group(2))
+            x = self.winfo_rootx() + (self.winfo_width() - width) // 2 - frame_x
+            y = self.winfo_rooty() + (self.winfo_height() - height) // 2 - frame_y
+            x = max(0, min(x, dialog.winfo_screenwidth() - width))
+            y = max(0, min(y, dialog.winfo_screenheight() - height))
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
 
         self.wait_window(dialog)
         return result
