@@ -14,6 +14,8 @@ class Settings:
     forge_root: str = DEFAULT_FORGE_ROOT
     forge_url: str = "http://127.0.0.1:7860"
     nas_models_dir: str = ""
+    ui_theme: str = "Shiori"
+    ui_font: str = "Current / Default"
 
     @property
     def forge_root_path(self) -> Path:
@@ -56,6 +58,8 @@ def load_settings() -> Settings:
             forge_root=data.get("forge_root", DEFAULT_FORGE_ROOT),
             forge_url=data.get("forge_url", "http://127.0.0.1:7860"),
             nas_models_dir=data.get("nas_models_dir", ""),
+            ui_theme=data.get("ui_theme", "Shiori"),
+            ui_font=data.get("ui_font", "Current / Default"),
         )
     except Exception:
         return Settings()

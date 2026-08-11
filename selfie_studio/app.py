@@ -65,6 +65,18 @@ from .favorites import load_lora_favorites, save_lora_favorites
 from .core_manager import get_repository
 from .persistence import ensure_persistence, get_shared_root
 from .ui_common import make_list_detail_pane, make_detail_box
+from .themes import DEFAULT_THEME, get_theme, theme_names
+from .ui_fonts import (
+    DEFAULT_UI_FONT,
+    UI_FONT_BODY,
+    UI_FONT_EMPHASIS,
+    UI_FONT_NORMAL,
+    UI_FONT_SECTION,
+    UI_FONT_SMALL,
+    UI_FONT_TAB,
+    configure_named_fonts,
+    ui_font_choices,
+)
 import os
 from zipfile import ZipFile, ZIP_DEFLATED, BadZipFile
 import tempfile
@@ -81,6 +93,17 @@ class App(tk.Tk):
         self.shared_root = ensure_persistence(self, current_version="1.2.3")
 
         self.settings = load_settings()
+        self.ui_theme_name = tk.StringVar(
+            value=self.settings.ui_theme
+            if self.settings.ui_theme in theme_names()
+            else DEFAULT_THEME
+        )
+        self.ui_font_name = tk.StringVar(
+            value=self.settings.ui_font
+            if self.settings.ui_font in ui_font_choices()
+            else DEFAULT_UI_FONT
+        )
+        self._apply_ui_theme()
         self.local_models = []
         self.nas_models = []
         self.current_preview = None
@@ -117,6 +140,16 @@ class App(tk.Tk):
         ttk.Label(header, text="Selfie AI Studio", font=("", 18, "bold")).pack(side="left")
         self.connection_var = tk.StringVar(value="Forge: 未確認")
         ttk.Label(header, textvariable=self.connection_var).pack(side="right")
+        self.ui_theme_combo = ttk.Combobox(
+            header,
+            textvariable=self.ui_theme_name,
+            values=theme_names(),
+            state="readonly",
+            width=12,
+        )
+        self.ui_theme_combo.pack(side="right", padx=(6, 18))
+        self.ui_theme_combo.bind("<<ComboboxSelected>>", self._ui_theme_selected)
+        ttk.Label(header, text="UI Theme").pack(side="right")
 
         tabs = ttk.Notebook(self)
         self.tabs = tabs
@@ -170,6 +203,107 @@ class App(tk.Tk):
 
         self.status = tk.StringVar(value=f"準備完了 / 共通Data: {self.shared_root / 'Data'}")
         ttk.Label(self, textvariable=self.status, anchor="w").pack(fill="x", padx=12, pady=(0, 8))
+        self._apply_theme_to_tk_widgets(self)
+
+    def _apply_ui_theme(self):
+        colors = get_theme(self.ui_theme_name.get())
+        self._theme_colors = colors
+        self.configure(background=colors["background"])
+        self._ui_font_available = configure_named_fonts(
+            self, self.ui_font_name.get()
+        )
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(".", background=colors["background"], foreground=colors["text"], font=UI_FONT_NORMAL)
+        style.configure("TFrame", background=colors["background"])
+        style.configure("Panel.TFrame", background=colors["panel"])
+        style.configure("TLabel", background=colors["background"], foreground=colors["text"])
+        style.configure("Muted.TLabel", foreground=colors["text_muted"], font=UI_FONT_SMALL)
+        style.configure("Important.TLabel", foreground=colors["text"], font=UI_FONT_SECTION, padding=(2, 4))
+        style.configure("TLabelframe", background=colors["panel"], bordercolor=colors["border"], relief="solid")
+        style.configure("TLabelframe.Label", background=colors["panel"], foreground=colors["accent"], font=UI_FONT_SECTION, padding=(3, 5))
+        style.configure("Important.TLabelframe", background=colors["panel"], bordercolor=colors["accent"], borderwidth=1, relief="solid")
+        style.configure("Important.TLabelframe.Label", background=colors["panel"], foreground=colors["text"], font=UI_FONT_SECTION, padding=(5, 6))
+        style.configure("TButton", background=colors["panel_alt"], foreground=colors["text"], bordercolor=colors["border"], padding=(10, 8), font=UI_FONT_EMPHASIS)
+        style.map("TButton", background=[("active", colors["accent_hover"]), ("pressed", colors["selection"])])
+        style.configure("Primary.TButton", background=colors["primary"], foreground=colors["background"], bordercolor=colors["primary"], padding=(18, 10), font=UI_FONT_EMPHASIS)
+        style.map("Primary.TButton", background=[("active", colors["primary_hover"]), ("pressed", colors["primary_hover"])])
+        style.configure("Accent.TButton", background=colors["accent_hover"], foreground=colors["text"], bordercolor=colors["accent"], padding=(10, 8), font=UI_FONT_NORMAL)
+        style.map("Accent.TButton", background=[("active", colors["accent"]), ("pressed", colors["selection"])])
+        style.configure("Success.TButton", background=colors["success"], foreground=colors["background"], bordercolor=colors["success"], padding=(10, 8), font=UI_FONT_EMPHASIS)
+        style.map("Success.TButton", background=[("active", colors["primary_hover"]), ("pressed", colors["success"])])
+        style.configure("Danger.TButton", background=colors["danger"], foreground=colors["text"], bordercolor=colors["danger"], font=UI_FONT_EMPHASIS)
+        style.map("Danger.TButton", background=[("active", colors["primary_hover"])])
+        for widget_style in ("TEntry", "TSpinbox", "TCombobox"):
+            style.configure(widget_style, fieldbackground=colors["input"], background=colors["input"], foreground=colors["text"], bordercolor=colors["border"], arrowcolor=colors["text_muted"], font=UI_FONT_NORMAL, padding=5)
+            style.map(widget_style, fieldbackground=[("readonly", colors["input"])], foreground=[("readonly", colors["text"])], selectbackground=[("readonly", colors["selection"])], bordercolor=[("focus", colors["accent"]), ("!focus", colors["border"])])
+        style.configure("TCheckbutton", background=colors["background"], foreground=colors["text"])
+        style.map("TCheckbutton", background=[("active", colors["background"])])
+        style.configure("TNotebook", background=colors["background"], bordercolor=colors["border"])
+        style.configure("TNotebook.Tab", background=colors["panel"], foreground=colors["text"], padding=(14, 9), font=UI_FONT_TAB)
+        style.map("TNotebook.Tab", background=[("selected", colors["selection"]), ("active", colors["panel_alt"])], foreground=[("selected", colors["text"])])
+        style.configure("Treeview", background=colors["panel"], fieldbackground=colors["panel"], foreground=colors["text"], bordercolor=colors["border"], font=UI_FONT_NORMAL, rowheight=29)
+        style.map("Treeview", background=[("selected", colors["selection"])], foreground=[("selected", colors["text"])])
+        style.configure("Treeview.Heading", background=colors["panel_alt"], foreground=colors["text"], relief="flat", font=UI_FONT_EMPHASIS, padding=(6, 5))
+
+    def _apply_theme_to_tk_widgets(self, widget):
+        colors = self._theme_colors
+        prompt_body_widgets = {
+            candidate
+            for candidate in (
+                getattr(self, "prompt", None),
+                getattr(self, "negative", None),
+            )
+            if candidate is not None
+        }
+        for child in widget.winfo_children():
+            try:
+                if isinstance(child, tk.Text):
+                    text_font = (
+                        UI_FONT_BODY
+                        if child in prompt_body_widgets
+                        else UI_FONT_NORMAL
+                    )
+                    child.configure(background=colors["input"], foreground=colors["text"], insertbackground=colors["text"], selectbackground=colors["selection"], relief="flat", highlightbackground=colors["border"], highlightcolor=colors["accent"], highlightthickness=1, font=text_font, spacing1=1, spacing3=1)
+                elif isinstance(child, tk.Canvas):
+                    child.configure(background=colors["background"], highlightbackground=colors["border"])
+                elif isinstance(child, tk.Listbox):
+                    child.configure(background=colors["panel"], foreground=colors["text"], selectbackground=colors["selection"], selectforeground=colors["text"])
+            except tk.TclError:
+                pass
+            self._apply_theme_to_tk_widgets(child)
+
+    def _ui_theme_selected(self, _event=None):
+        self._apply_ui_theme()
+        self._apply_theme_to_tk_widgets(self)
+        self.settings.ui_theme = self.ui_theme_name.get()
+        save_settings(self.settings)
+        if hasattr(self, "status"):
+            self.status.set(f"UI Themeを変更しました: {self.ui_theme_name.get()}")
+
+    def _ui_font_selected(self, _event=None):
+        selected = self.ui_font_name.get()
+        self._ui_font_available = configure_named_fonts(self, selected)
+        # Reconfigure ttk styles and direct Tk widgets against the updated
+        # named fonts. Prompt body keeps its independent UI_FONT_BODY family.
+        self._apply_ui_theme()
+        self._apply_theme_to_tk_widgets(self)
+        self.settings.ui_font = selected
+        save_settings(self.settings)
+        if hasattr(self, "ui_font_status_var"):
+            self.ui_font_status_var.set(
+                "即時反映しました"
+                if self._ui_font_available
+                else "フォント未検出: Current / Defaultで表示中"
+            )
+        if hasattr(self, "status"):
+            suffix = "" if self._ui_font_available else "（Defaultへフォールバック）"
+            self.status.set(f"UI Fontを変更しました: {selected}{suffix}")
+
 
     def _build_home(self):
         top = ttk.Frame(self.home)
@@ -10245,6 +10379,42 @@ class App(tk.Tk):
             font=("", 16, "bold")
         ).pack(anchor="w", pady=(0, 10))
 
+        appearance_box = ttk.LabelFrame(
+            self.settings_tab, text="表示", padding=10
+        )
+        appearance_box.pack(fill="x", pady=(0, 10))
+        font_row = ttk.Frame(appearance_box)
+        font_row.pack(fill="x")
+        ttk.Label(font_row, text="UI Font", width=24).pack(side="left")
+        self.ui_font_combo = ttk.Combobox(
+            font_row,
+            textvariable=self.ui_font_name,
+            values=ui_font_choices(),
+            state="readonly",
+            width=24,
+        )
+        self.ui_font_combo.pack(side="left")
+        self.ui_font_combo.bind(
+            "<<ComboboxSelected>>", self._ui_font_selected
+        )
+        self.ui_font_status_var = tk.StringVar(
+            value=(
+                "現在のUIフォントを使用中"
+                if self._ui_font_available
+                else "フォント未検出: Current / Defaultで表示中"
+            )
+        )
+        ttk.Label(
+            font_row,
+            textvariable=self.ui_font_status_var,
+            style="Muted.TLabel",
+        ).pack(side="left", padx=(12, 0))
+        ttk.Label(
+            appearance_box,
+            text="UI Themeとは独立して保存されます。Prompt本文のフォントは変更しません。",
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(6, 0))
+
         forge_box = ttk.LabelFrame(
             self.settings_tab, text="Forge", padding=10
         )
@@ -10596,6 +10766,8 @@ class App(tk.Tk):
             forge_root=self.setting_vars["forge_root"].get().strip(),
             forge_url=self.setting_vars["forge_url"].get().strip(),
             nas_models_dir=self.setting_vars["nas_models_dir"].get().strip(),
+            ui_theme=self.ui_theme_name.get(),
+            ui_font=self.ui_font_name.get(),
         )
         save_settings(self.settings)
         self.status.set("設定を保存しました")
