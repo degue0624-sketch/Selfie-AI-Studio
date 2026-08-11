@@ -66,6 +66,11 @@ from .favorites import load_lora_favorites, save_lora_favorites
 from .core_manager import get_repository
 from .persistence import ensure_persistence, get_shared_root
 from .ui_common import make_list_detail_pane, make_detail_box
+from .color_correction import save_color_corrected_copy
+from .color_correction_presets import (
+    load_color_correction_presets,
+    save_color_correction_presets,
+)
 from .themes import DEFAULT_THEME, get_theme, theme_names
 from .ui_fonts import (
     DEFAULT_UI_FONT,
@@ -13018,6 +13023,194 @@ class App(tk.Tk):
         self._render_session_generation_gallery()
         self.status.set(f"最新生成を比較{slot}に設定しました: {path.name}")
 
+    def _post_color_correction_settings(self, require_enabled=True):
+        enabled_var = getattr(self, "post_color_correction_var", None)
+        contrast_var = getattr(self, "post_color_contrast", None)
+        saturation_var = getattr(self, "post_color_saturation", None)
+        brightness_var = getattr(self, "post_color_brightness", None)
+        if require_enabled and (enabled_var is None or not enabled_var.get()):
+            return None
+        if any(var is None for var in (contrast_var, saturation_var, brightness_var)):
+            return None
+        try:
+            values = {
+                "contrast": float(contrast_var.get()),
+                "saturation": float(saturation_var.get()),
+                "brightness": float(brightness_var.get()),
+            }
+            if any(value < 0 for value in values.values()):
+                raise ValueError
+            return values
+        except (TypeError, ValueError, tk.TclError):
+            messagebox.showwarning(
+                "Post Color Correction",
+                "Contrast / Saturation / Brightnessは0以上の数値で指定してください。",
+            )
+            return None
+    def refresh_color_correction_presets(self):
+        if not hasattr(self, "color_correction_preset_combo"):
+            return
+        items = load_color_correction_presets(self.color_correction_preset_path)
+        items = sorted(items, key=lambda item: item["name"].lower())
+        self._color_correction_preset_records = {
+            item["name"]: item for item in items
+        }
+        names = ["未選択", *self._color_correction_preset_records]
+        self.color_correction_preset_combo["values"] = names
+        if self.color_correction_preset_name.get() not in names:
+            self.color_correction_preset_name.set("未選択")
+    def save_current_color_correction_preset(self):
+        settings = self._post_color_correction_settings(require_enabled=False)
+        if settings is None:
+            return
+        name = simpledialog.askstring(
+            "色補正プリセット",
+            "プリセット名を入力してください。",
+            parent=self,
+        )
+        if not name or not name.strip():
+            return
+        name = name.strip()
+        records = dict(getattr(self, "_color_correction_preset_records", {}))
+        if name in records and not messagebox.askyesno(
+            "色補正プリセット",
+            f"「{name}」は既に存在します。\n上書きしますか？",
+            parent=self,
+        ):
+            return
+        records[name] = {"name": name, **settings}
+        try:
+            save_color_correction_presets(
+                self.color_correction_preset_path,
+                records.values(),
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "色補正プリセット", f"保存に失敗しました。\n{e}", parent=self
+            )
+            return
+        self.refresh_color_correction_presets()
+        self.color_correction_preset_name.set(name)
+        self.status.set(f"色補正プリセットを保存しました: {name}")
+    def apply_selected_color_correction_preset(self, _event=None):
+        name = self.color_correction_preset_name.get().strip()
+        if not name or name == "未選択":
+            return
+        item = getattr(self, "_color_correction_preset_records", {}).get(name)
+        if not item:
+            self.refresh_color_correction_presets()
+            return
+        self.post_color_contrast.set(item["contrast"])
+        self.post_color_saturation.set(item["saturation"])
+        self.post_color_brightness.set(item["brightness"])
+        self.status.set(f"色補正プリセットを読み込みました: {name}")
+    def delete_selected_color_correction_preset(self):
+        name = self.color_correction_preset_name.get().strip()
+        records = dict(getattr(self, "_color_correction_preset_records", {}))
+        if not name or name == "未選択" or name not in records:
+            messagebox.showinfo(
+                "色補正プリセット",
+                "削除する色補正プリセットを選択してください。",
+                parent=self,
+            )
+            return
+        if not messagebox.askyesno(
+            "色補正プリセット",
+            f"「{name}」を削除しますか？",
+            parent=self,
+        ):
+            return
+        del records[name]
+        try:
+            save_color_correction_presets(
+                self.color_correction_preset_path,
+                records.values(),
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "色補正プリセット", f"削除に失敗しました。\n{e}", parent=self
+            )
+            return
+        self.color_correction_preset_name.set("未選択")
+        self.refresh_color_correction_presets()
+        self.status.set(f"色補正プリセットを削除しました: {name}")
+    def _save_post_color_corrected_copy(self, image_path, settings):
+        if not settings:
+            return None
+        try:
+            return save_color_corrected_copy(image_path, **settings)
+        except Exception as e:
+            self.after(
+                0,
+                lambda err=str(e): messagebox.showwarning(
+                    "Post Color Correction",
+                    f"色補正版を保存できませんでした。元画像は変更されていません。\n{err}",
+                ),
+            )
+            return None
+    def apply_color_correction_to_selected_image(self):
+        selected_path = str(getattr(self, "_session_selected_path", "") or "")
+        if not selected_path:
+            messagebox.showinfo(
+                "Post Color Correction",
+                "色補正する画像をセッション生成一覧から選択してください。",
+            )
+            return
+
+        image_path = Path(selected_path)
+        if not image_path.is_file():
+            messagebox.showwarning(
+                "Post Color Correction",
+                f"選択画像が見つかりません。\n{image_path}",
+            )
+            return
+
+        settings = self._post_color_correction_settings(require_enabled=False)
+        if settings is None:
+            return
+
+        source_record = dict(
+            getattr(self, "_latest_generated_record", None) or {}
+        )
+
+        def show_saved_copy(output_path):
+            display_record = dict(source_record)
+            display_record["image_path"] = str(output_path)
+            self._show_record_in_generate_detail(
+                display_record, refresh_gallery=False
+            )
+            self.latest_generated_file.set(f"ファイル: {output_path}")
+
+            original_compare = dict(source_record)
+            original_compare["image_path"] = str(image_path)
+            original_compare["name"] = image_path.name
+
+            corrected_compare = dict(display_record)
+            corrected_compare["name"] = output_path.name
+
+            self._adopted_compare_a = original_compare
+            self._adopted_compare_b = corrected_compare
+            self._refresh_generate_compare_status()
+            self._render_session_generation_gallery()
+            self.status.set("元画像と補正版をA/B比較に設定しました")
+            messagebox.showinfo(
+                "Post Color Correction",
+                f"色補正版を保存しました。元画像は変更されていません。\n{output_path}",
+            )
+            self.open_adopted_compare_viewer()
+
+        def worker():
+            output_path = self._save_post_color_corrected_copy(
+                image_path, settings
+            )
+            if output_path is not None:
+                self.after(
+                    0,
+                    lambda p=output_path: show_saved_copy(p),
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def stop_generation_queue(self):
         if not getattr(self, "_queue_running", False):
             self.queue_status.set("キュー: 待機")
@@ -13074,6 +13267,7 @@ class App(tk.Tk):
             seed=int(self.seed.get().strip()),
             scheduler=self.scheduler.get(),
         )
+        post_color_settings = self._post_color_correction_settings()
 
         selected_model = self.model_combo.get().strip()
         generation_loras = dict(self.active_loras)
@@ -13158,6 +13352,9 @@ class App(tk.Tk):
                     image_path = out_root / f"selfie_{stamp}.png"
                     json_path = out_root / f"selfie_{stamp}.json"
                     image_path.write_bytes(images[0])
+                    self._save_post_color_corrected_copy(
+                        image_path, post_color_settings
+                    )
 
                     effective_model = selected_model or current_model_hint
                     if not effective_model:
@@ -13305,6 +13502,7 @@ class App(tk.Tk):
             seed=int(self.seed.get().strip()),
             scheduler=self.scheduler.get(),
         )
+        post_color_settings = self._post_color_correction_settings()
         selected_model = self.model_combo.get().strip()
         generation_loras = dict(self.active_loras)
 
@@ -13363,6 +13561,9 @@ class App(tk.Tk):
             image_path = out_root / f"selfie_{stamp}.png"
             json_path = out_root / f"selfie_{stamp}.json"
             image_path.write_bytes(images[0])
+            self._save_post_color_corrected_copy(
+                image_path, post_color_settings
+            )
             effective_model = selected_model or current_model_hint
             if not effective_model:
                 try:
