@@ -4546,6 +4546,7 @@ class App(tk.Tk):
         try:
             api = self.api()
             models = api.list_models()
+            self._set_forge_connection_status("connected")
             titles = [x.get("title", "") for x in models if x.get("title")]
             if not titles:
                 return False
@@ -5699,6 +5700,10 @@ class App(tk.Tk):
             opts = api.ping()
             current = opts.get("sd_model_checkpoint", title)
             self.after(0, lambda: self.current_model_var.set(current))
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
             self.after(0, self.refresh_character_list)
             self.after(0, self._refresh_generate_workflow_state)
         self._bg(work, f"Character「{character_name}」のモデルをForgeへ適用しました")
@@ -12339,6 +12344,10 @@ class App(tk.Tk):
             titles = [x.get("title","") for x in models if x.get("title")]
             opts = api.ping()
             current = opts.get("sd_model_checkpoint", "")
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
             self.after(0, lambda: self.model_combo.configure(values=titles))
             if current:
                 def select_current():
@@ -12357,6 +12366,10 @@ class App(tk.Tk):
             opts = self.api().ping()
             current = opts.get("sd_model_checkpoint", "(取得できず)")
             self.after(0, lambda: self.current_model_var.set(current))
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
         self._bg(work, "現在のForgeモデルを確認しました")
 
     def apply_selected_model(self):
@@ -12376,6 +12389,10 @@ class App(tk.Tk):
             opts = api.ping()
             current = opts.get("sd_model_checkpoint", selected)
             self.after(0, lambda: self.current_model_var.set(current))
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
             self.after(0, self._refresh_generate_workflow_state)
         self._bg(work, "Forgeのモデル切替が完了しました")
 
@@ -12383,6 +12400,10 @@ class App(tk.Tk):
         def work():
             names = self.api().list_samplers()
             self.after(0, lambda: self.sampler_combo.configure(values=names))
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
         self._bg(work, "Sampler一覧を取得しました")
 
     def _generate_precheck(self):
