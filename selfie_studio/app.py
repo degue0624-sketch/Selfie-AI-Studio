@@ -9777,43 +9777,47 @@ class App(tk.Tk):
 
         toolbar = ttk.Frame(win, padding=(8, 8, 8, 4))
         toolbar.pack(fill="x")
+        zoom_row = ttk.Frame(toolbar)
+        zoom_row.pack(fill="x")
+        action_row = ttk.Frame(toolbar)
+        action_row.pack(fill="x", pady=(6, 0))
 
         zoom_var = tk.StringVar(value="Fit")
         sync_var = tk.BooleanVar(value=True)
 
-        ttk.Label(toolbar, textvariable=zoom_var, width=12).pack(side="left")
-        ttk.Button(toolbar, text="Fit", command=lambda: _draw_all(fit=True)).pack(side="left", padx=(0, 4))
+        ttk.Label(zoom_row, textvariable=zoom_var, width=12).pack(side="left")
+        ttk.Button(
+            zoom_row, text="Fit", command=lambda: _draw_all(fit=True)
+        ).pack(side="left", padx=(0, 4))
         for p in (25, 50, 100, 200, 400):
             ttk.Button(
-                toolbar,
+                zoom_row,
                 text=f"{p}%",
                 command=lambda value=p: _draw_all(percent=value)
             ).pack(side="left", padx=(0, 4))
 
-        ttk.Checkbutton(
-            toolbar,
-            text="同期ズーム",
-            variable=sync_var
-        ).pack(side="left", padx=(12, 0))
-
-        ttk.Label(
-            toolbar,
-            text="ホイール: ズーム / 左ドラッグ: 移動"
-        ).pack(side="left", padx=(12, 0))
-
         ttk.Button(
-            toolbar, text="閉じる", command=win.destroy
+            action_row, text="閉じる", command=win.destroy
         ).pack(side="right")
         ttk.Button(
-            toolbar,
+            action_row,
             text="Bを採用",
             command=lambda: self.adopt_compare_slot_from_generate("B")
         ).pack(side="right", padx=(0, 6))
         ttk.Button(
-            toolbar,
+            action_row,
             text="Aを採用",
             command=lambda: self.adopt_compare_slot_from_generate("A")
         ).pack(side="right", padx=(0, 6))
+        ttk.Label(
+            action_row,
+            text="ホイール: ズーム / 左ドラッグ: 移動"
+        ).pack(side="right", padx=(0, 12))
+        ttk.Checkbutton(
+            action_row,
+            text="同期ズーム",
+            variable=sync_var
+        ).pack(side="right")
 
         pane = ttk.Panedwindow(win, orient="horizontal")
         pane.pack(fill="both", expand=True, padx=8, pady=(4, 8))
