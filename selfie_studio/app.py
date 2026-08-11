@@ -4511,6 +4511,10 @@ class App(tk.Tk):
             command=self.char_toggle_favorite
         ).pack(side="left")
         ttk.Button(
+            btns, text="削除",
+            command=self.char_delete_selected
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
             btns, text="採用画像一覧",
             command=self.open_character_adopted_window
         ).pack(side="left", padx=6)
@@ -4685,6 +4689,147 @@ class App(tk.Tk):
         if not sel:
             return None
         return self.repo.get_item("characters", sel[0])
+
+    def _char_reference_counts(self, item):
+        """Count database references without changing or deleting related data."""
+        character_id = str(item.get("id") or "")
+        character_name = str(item.get("name") or "").strip()
+
+        project_count = 0
+        session_count = 0
+        for project in self.repo.list_items("projects"):
+            if (
+                str(project.get("character_id") or "") == character_id
+                or (
+                    character_name
+                    and str(project.get("character_name") or "").strip()
+                    == character_name
+                )
+            ):
+                project_count += 1
+
+            session = project.get("session") or {}
+            if str(session.get("character_id") or "") == character_id:
+                session_count += 1
+
+        history_count = sum(
+            1 for record in self.repo.list_items("history")
+            if str(record.get("character_id") or "") == character_id
+        )
+        adopted_count = sum(
+            1 for record in self.repo.list_items("adopted")
+            if str(record.get("character_id") or "") == character_id
+        )
+
+        workspace = self.repo.workspace()
+        workspace_count = int(any(
+            str(workspace.get(key) or "") == character_id
+            for key in ("current_character_id", "active_character_id")
+        ))
+
+        return {
+            "Project": project_count,
+            "Project session": session_count,
+            "History": history_count,
+            "adopted": adopted_count,
+            "workspace": workspace_count,
+        }
+
+    def char_delete_selected(self):
+        item = self._char_selected_item()
+        if not item:
+            messagebox.showinfo(
+                "Character削除",
+                "削除するCharacterを一覧から選択してください。",
+                parent=self,
+            )
+            return
+
+        character_id = str(item.get("id") or "")
+        character_name = item.get("name") or item.get("display_name") or character_id
+        if not character_id:
+            messagebox.showwarning(
+                "Character削除",
+                "選択したCharacterにIDがないため削除できません。",
+                parent=self,
+            )
+            return
+
+        try:
+            references = self._char_reference_counts(item)
+        except Exception as exc:
+            messagebox.showerror(
+                "Character削除",
+                f"参照状況を確認できなかったため、削除を中止しました。\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        total_references = sum(references.values())
+        if total_references:
+            details = "\n".join(
+                f"- {label}: {count}件"
+                for label, count in references.items()
+                if count
+            )
+            prompt = (
+                f"Character「{character_name}」は合計{total_references}件から参照されています。\n\n"
+                f"{details}\n\n"
+                "削除すると、Project・History・adoptedの参照先にCharacter不在の記録が残ります。\n"
+                "workspaceの参照は安全に未選択へ戻します。\n"
+                "画像ファイルとMaster画像は削除されません。\n\n"
+                "それでも削除しますか？"
+            )
+        else:
+            prompt = (
+                f"Character「{character_name}」を削除しますか？\n\n"
+                "画像ファイルとMaster画像は削除されません。"
+            )
+
+        if not messagebox.askyesno(
+            "Character削除確認",
+            prompt,
+            icon="warning" if total_references else "question",
+            parent=self,
+        ):
+            return
+
+        try:
+            if references["workspace"]:
+                workspace = self.repo.workspace()
+                for key in ("current_character_id", "active_character_id"):
+                    if str(workspace.get(key) or "") == character_id:
+                        workspace[key] = None
+                self.repo.save_workspace(workspace)
+
+            if not self.repo.delete_item("characters", character_id):
+                messagebox.showwarning(
+                    "Character削除",
+                    "Characterが見つからなかったため削除できませんでした。",
+                    parent=self,
+                )
+                return
+        except Exception as exc:
+            messagebox.showerror(
+                "Character削除",
+                f"Characterの削除に失敗しました。\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        if getattr(self, "active_character_id", "") == character_id:
+            self.active_character_id = ""
+            self._quick_active_character_name = "未選択"
+            if hasattr(self, "quick_character"):
+                self.quick_character.set("未選択")
+
+        self.char_clear_form()
+        self.refresh_character_list()
+        if hasattr(self, "quick_project_combo"):
+            self.refresh_generate_quick_setup()
+        if hasattr(self, "core_tree"):
+            self.refresh_core_status()
+        self.char_status.set(f"削除しました: {character_name}")
 
     def _char_parse_loras(self, raw):
         out = []
