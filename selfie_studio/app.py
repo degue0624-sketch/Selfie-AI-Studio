@@ -144,7 +144,7 @@ class App(tk.Tk):
         header = ttk.Frame(self, padding=(12, 10))
         header.pack(fill="x")
         ttk.Label(header, text="Selfie AI Studio", font=("", 18, "bold")).pack(side="left")
-        self.connection_var = tk.StringVar(value="Forge: 未確認")
+        self.connection_var = tk.StringVar(value="Forge: 確認中")
         ttk.Label(header, textvariable=self.connection_var).pack(side="right")
         self.ui_theme_combo = ttk.Combobox(
             header,
@@ -11587,6 +11587,16 @@ class App(tk.Tk):
     def api(self):
         return ForgeApi(self.setting_vars["forge_url"].get().strip())
 
+    def _set_forge_connection_status(self, state):
+        labels = {
+            "checking": "Forge: 確認中",
+            "connected": "Forge: 接続中",
+            "disconnected": "Forge: 未接続",
+            "error": "Forge: エラー",
+        }
+        if hasattr(self, "connection_var"):
+            self.connection_var.set(labels.get(state, labels["error"]))
+
     def _bg(self, fn, success="完了", on_success=None, on_error=None):
         def runner():
             try:
@@ -11614,6 +11624,8 @@ class App(tk.Tk):
         self.diag.configure(state="disabled")
 
     def run_diagnostics(self):
+        self._set_forge_connection_status("checking")
+
         def work():
             root = Path(self.setting_vars["forge_root"].get().strip())
             s = Settings(
@@ -11650,11 +11662,17 @@ class App(tk.Tk):
                 model = opts.get("sd_model_checkpoint", "(取得できず)")
                 lines.append(f"\nForge API: OK  {s.forge_url}")
                 lines.append(f"現在モデル: {model}")
-                self.after(0, lambda: self.connection_var.set("Forge: 接続中"))
+                self.after(
+                    0,
+                    lambda: self._set_forge_connection_status("connected"),
+                )
             except Exception:
                 lines.append(f"\nForge API: 未接続  {s.forge_url}")
                 lines.append("Forgeが停止中、またはAPIが有効でない可能性があります。")
-                self.after(0, lambda: self.connection_var.set("Forge: 未接続"))
+                self.after(
+                    0,
+                    lambda: self._set_forge_connection_status("disconnected"),
+                )
 
             self.after(0, lambda: self._diag_set("\n".join(lines)))
             self.after(0, self.scan_local_models)
@@ -11667,8 +11685,13 @@ class App(tk.Tk):
     def ping(self):
         def work():
             self.api().ping()
-            self.after(0, lambda: self.connection_var.set("Forge: 接続中"))
-        self._bg(work, "Forgeへ接続できました")
+        self._set_forge_connection_status("checking")
+        self._bg(
+            work,
+            "Forgeへ接続できました",
+            on_success=lambda: self._set_forge_connection_status("connected"),
+            on_error=lambda: self._set_forge_connection_status("error"),
+        )
 
     def _model_meta_path(self):
         return Path(self.shared_root) / "Data" / "model_meta.json"
@@ -12123,8 +12146,10 @@ class App(tk.Tk):
             api = self.api()
             api.ping()
             forge_ok = True
+            self._set_forge_connection_status("connected")
         except Exception:
             forge_ok = False
+            self._set_forge_connection_status("disconnected")
         if not forge_ok:
             issues.append("Forge未接続")
 
@@ -14020,9 +14045,24 @@ class App(tk.Tk):
                     augmented = self._attach_master_reference_to_payload(dict(payload), api)
                     if augmented is None:
                         return
-                    images, raw = api.txt2img(augmented)
+                    try:
+                        images, raw = api.txt2img(augmented)
+                    except Exception:
+                        self.after(
+                            0,
+                            lambda: self._set_forge_connection_status("error"),
+                        )
+                        raise
                     if not images:
+                        self.after(
+                            0,
+                            lambda: self._set_forge_connection_status("error"),
+                        )
                         raise ForgeApiError("画像が返りませんでした。")
+                    self.after(
+                        0,
+                        lambda: self._set_forge_connection_status("connected"),
+                    )
 
                     self._record_active_lora_usage(generation_loras)
                     self._record_model_usage(
@@ -14242,9 +14282,24 @@ class App(tk.Tk):
             if augmented is None:
                 # User-visible error already shown; abort generation.
                 return
-            images, raw = api.txt2img(augmented)
+            try:
+                images, raw = api.txt2img(augmented)
+            except Exception:
+                self.after(
+                    0,
+                    lambda: self._set_forge_connection_status("error"),
+                )
+                raise
             if not images:
+                self.after(
+                    0,
+                    lambda: self._set_forge_connection_status("error"),
+                )
                 raise ForgeApiError("画像が返りませんでした。")
+            self.after(
+                0,
+                lambda: self._set_forge_connection_status("connected"),
+            )
 
             # Count usage only after Forge returned an image successfully.
             self._record_active_lora_usage(generation_loras)
