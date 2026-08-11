@@ -9153,6 +9153,10 @@ class App(tk.Tk):
             command=self.history_adopt_selected
         ).pack(side="left")
         ttk.Button(
+            actions, text="選択履歴を削除",
+            command=self.history_delete_selected
+        ).pack(side="left", padx=(6, 0))
+        ttk.Button(
             actions, text="画像を開く",
             command=self.open_selected_studio_image
         ).pack(side="right")
@@ -10431,7 +10435,7 @@ class App(tk.Tk):
             "不採用": "× 不採用",
         }.get(status or "未評価", status or "未評価")
 
-    def refresh_studio_history(self):
+    def refresh_studio_history(self, select_first=True):
         if not hasattr(self, "studio_history_tree"):
             return
 
@@ -10505,7 +10509,7 @@ class App(tk.Tk):
 
         self.studio_history_info.set(f"表示 {len(visible)} / 全 {len(items)} 件")
 
-        if visible:
+        if visible and select_first:
             first_id = visible[0].get("id")
             if first_id in self.studio_history_tree.get_children():
                 self.studio_history_tree.selection_set(first_id)
@@ -10649,6 +10653,102 @@ class App(tk.Tk):
         self.status.set(
             f"Historyを更新しました: {Path(updated.get('image_path') or '').name}"
         )
+
+    def history_delete_selected(self):
+        record = self._selected_studio_record()
+        if not record:
+            messagebox.showinfo(
+                "History削除",
+                "削除する履歴を一覧から選択してください。",
+                parent=self,
+            )
+            return
+
+        history_id = str(record.get("id") or "")
+        if not history_id:
+            messagebox.showwarning(
+                "History削除",
+                "選択した履歴にIDがないため削除できません。",
+                parent=self,
+            )
+            return
+
+        try:
+            adopted_record = self.repo.find_adopted_by_history(history_id)
+        except Exception as exc:
+            messagebox.showerror(
+                "History削除",
+                f"採用DBからの参照を確認できなかったため、削除を中止しました。\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        if adopted_record and not messagebox.askyesno(
+            "採用済みHistoryの削除警告",
+            "この履歴はadopted.jsonから参照されています。\n\n"
+            "Historyだけを削除すると、採用DBには画像情報を残したまま、"
+            "参照元Historyが存在しない状態になります。\n"
+            "adopted.jsonと画像ファイルは変更しません。\n\n"
+            "削除確認へ進みますか？",
+            icon="warning",
+            parent=self,
+        ):
+            return
+
+        created_at = record.get("created_at") or record.get("time") or ""
+        try:
+            created_at_text = datetime.fromtimestamp(
+                float(created_at)
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            created_at_text = str(created_at or "未設定")
+
+        project_name = self._history_project_name(record.get("project_id"))
+        character_name = self._history_character_name(record.get("character_id"))
+        model = record.get("model") or "未設定"
+        adopted_note = (
+            "\n警告: この履歴は採用DBから参照されています。"
+            if adopted_record else ""
+        )
+        prompt = (
+            f"日時: {created_at_text}\n"
+            f"Project: {project_name}\n"
+            f"Character: {character_name}\n"
+            f"Model: {model}\n"
+            f"{adopted_note}\n\n"
+            "この履歴レコードだけ削除します。画像ファイルは削除しません。\n"
+            "adopted.json、Project、Character、Master、workspaceも変更しません。\n\n"
+            "削除しますか？"
+        )
+        if not messagebox.askyesno(
+            "History削除確認",
+            prompt,
+            icon="warning" if adopted_record else "question",
+            parent=self,
+        ):
+            return
+
+        try:
+            deleted = self.repo.delete_item("history", history_id)
+        except Exception as exc:
+            messagebox.showerror(
+                "History削除",
+                f"履歴の削除に失敗しました。\n\n{exc}",
+                parent=self,
+            )
+            return
+
+        if not deleted:
+            messagebox.showwarning(
+                "History削除",
+                "選択した履歴が見つからなかったため削除できませんでした。",
+                parent=self,
+            )
+            return
+
+        self.refresh_studio_history(select_first=False)
+        self._clear_history_detail()
+        self.status.set(f"Historyを削除しました: {created_at_text}")
 
     def history_adopt_selected(self):
         r = self._selected_studio_record()
