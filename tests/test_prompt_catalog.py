@@ -55,6 +55,9 @@ class PromptCatalogTests(unittest.TestCase):
             create_catalog(db)
             self.assertEqual(validate_catalog(db)["prompt_items"], 1)
             catalog = PromptCatalog(db, user)
+            con = sqlite3.connect(db)
+            before = con.execute("SELECT COUNT(*) FROM prompt_items").fetchone()[0]
+            con.close()
             rows = catalog.search(
                 query="standing pose", category="ポーズ・動作",
                 model="Stable Diffusion",
@@ -68,6 +71,10 @@ class PromptCatalogTests(unittest.TestCase):
             favorite = catalog.search(favorite_only=True)
             self.assertEqual(favorite[0]["use_count"], 1)
             self.assertTrue(user.is_file())
+            con = sqlite3.connect(db)
+            after = con.execute("SELECT COUNT(*) FROM prompt_items").fetchone()[0]
+            con.close()
+            self.assertEqual(before, after)
 
     def test_zip_install_and_existing_backup(self):
         with tempfile.TemporaryDirectory() as tmp:

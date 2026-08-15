@@ -22,8 +22,12 @@ REQUIRED_TABLES = {
 
 
 def _connect_readonly(path: Path) -> sqlite3.Connection:
-    uri = path.resolve().as_uri() + "?mode=ro"
-    con = sqlite3.connect(uri, uri=True)
+    # SQLite URI mode rejects Windows UNC authorities (for example
+    # ``\\server\share``) on some Python/SQLite builds.  Studio commonly keeps
+    # its shared Data on a NAS, so open the native path and enforce read-only
+    # behavior at the connection level instead.
+    con = sqlite3.connect(str(Path(path)))
+    con.execute("PRAGMA query_only=ON")
     con.row_factory = sqlite3.Row
     return con
 
