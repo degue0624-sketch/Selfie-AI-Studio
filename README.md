@@ -29,8 +29,26 @@ python -m pip install -r requirements.txt
 - HistoryのCharacter・制作状態による管理、生成設定の復元
 - 評価・採否の保存、採用DBへのメタデータ登録
 - 最新生成内容をレビュー用Markdownとしてクリップボードへ送るSend to Selfie
+- Prompt Catalog（v2 SQLite）の検索・絞り込み・Generate追加
+  - `カタログ導入 / 更新` からv2 ZIPまたはSQLiteを選択
+  - 日本語名、英語prompt、別表記を横断検索
+  - カテゴリ、種別、成人度、モデルで絞り込み
+  - カタログ更新時は旧SQLiteを自動バックアップ
+  - お気に入り・使用履歴は `Data/prompt_catalog_user.json` へ分離保存
+  - 既存Prompt Library、History、採用DBは変更しない
 
 画像生成はGenerate画面で明示的に実行した場合だけ開始します。
+
+## Prompt Catalogの導入
+
+1. `Prompt Catalog` タブを開く。
+2. `カタログ導入 / 更新` を押す。
+3. `METACAMP_prompt_db_v2_candidate.zip` を選択する。
+4. 件数表示を確認し、検索またはフィルターで項目を選ぶ。
+5. `Generateへ追加` または `Negativeへ追加` を押す。
+
+追加操作は現在の入力欄へ末尾追加するだけで、画像生成は開始しません。
+カタログ本体は `Data/PromptCatalog/prompt_db_v2.sqlite` に配置されます。
 
 ## v1.2.3 モデル確認の自動化
 - Project / Character適用時、Forgeモデル一覧が未取得なら自動で静かに取得

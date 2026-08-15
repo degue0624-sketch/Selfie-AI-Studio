@@ -1,5 +1,13 @@
 # Selfie AI Studio Changelog
 
+## Prompt Catalog candidate
+- Added a read-only SQLite Prompt Catalog tab for the normalized METACAMP v2 database.
+- Added cross-field search and category, kind, adult-level, model, and favorite filters.
+- Added explicit append-to-Generate and append-to-Negative actions without automatic generation.
+- Added validated ZIP/SQLite installation with automatic backup of an existing catalog.
+- Kept catalog user state in a separate JSON overlay so catalog updates do not erase favorites or usage history.
+- Kept the existing Prompt Library, History, Adopted DB, Character, and Project stores unchanged.
+
 ## 1.5
 - Tracks the v1.5 development line; the application display and persistence version remain v1.2.3.
 - Project / Character / Prompt Library / Prompt Builder management.
@@ -22,4 +30,3 @@
 - v1.5 release self-check.
 - Workflow and layout cleanup.
 - Git helper scripts renamed to ASCII-only filenames to avoid Windows cmd encoding issues.
-

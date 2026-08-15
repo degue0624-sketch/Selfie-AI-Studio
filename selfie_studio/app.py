@@ -71,6 +71,7 @@ from .color_correction_presets import (
     load_color_correction_presets,
     save_color_correction_presets,
 )
+from .prompt_catalog import PromptCatalog, install_catalog
 from .themes import DEFAULT_THEME, get_theme, theme_names
 from .ui_fonts import (
     DEFAULT_UI_FONT,
@@ -165,6 +166,7 @@ class App(tk.Tk):
         self.models = ttk.Frame(tabs, padding=12)
         self.lora = ttk.Frame(tabs, padding=12)
         self.prompt_library = ttk.Frame(tabs, padding=12)
+        self.prompt_catalog = ttk.Frame(tabs, padding=12)
         self.prompt_builder = ttk.Frame(tabs, padding=12)
         self.ai_assistant = ttk.Frame(tabs, padding=12)
         self.image_review = ttk.Frame(tabs, padding=12)
@@ -180,6 +182,7 @@ class App(tk.Tk):
         tabs.add(self.models, text="モデル")
         tabs.add(self.lora, text="LoRA")
         tabs.add(self.prompt_library, text="Prompt Library")
+        tabs.add(self.prompt_catalog, text="Prompt Catalog")
         tabs.add(self.prompt_builder, text="Prompt Builder")
         tabs.add(self.ai_assistant, text="AI Assistant")
         tabs.add(self.image_review, text="画像解析")
@@ -196,6 +199,7 @@ class App(tk.Tk):
         self._build_models()
         self._build_lora()
         self._build_prompt_library()
+        self._build_prompt_catalog()
         self._build_prompt_builder()
         self._build_ai_assistant()
         self._build_image_review()
@@ -1377,6 +1381,262 @@ class App(tk.Tk):
             return ", ".join(tags)
         return base
 
+
+    def _prompt_catalog_paths(self):
+        data_dir = Path(self.shared_root) / "Data"
+        return (
+            data_dir / "PromptCatalog" / "prompt_db_v2.sqlite",
+            data_dir / "prompt_catalog_user.json",
+        )
+
+    def _build_prompt_catalog(self):
+        db_path, user_path = self._prompt_catalog_paths()
+        self.prompt_catalog_service = PromptCatalog(db_path, user_path)
+
+        top = ttk.Frame(self.prompt_catalog)
+        top.pack(fill="x")
+        ttk.Label(top, text="検索").pack(side="left")
+        self.pc_search = tk.StringVar()
+        ttk.Entry(top, textvariable=self.pc_search, width=28).pack(
+            side="left", padx=(6, 12)
+        )
+        self.pc_search.trace_add("write", lambda *_: self.refresh_prompt_catalog())
+
+        self.pc_favorite_only = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            top, text="お気に入りのみ", variable=self.pc_favorite_only,
+            command=self.refresh_prompt_catalog,
+        ).pack(side="left")
+        ttk.Button(
+            top, text="カタログ導入 / 更新", command=self.prompt_catalog_install
+        ).pack(side="right")
+        ttk.Button(
+            top, text="更新", command=self.refresh_prompt_catalog
+        ).pack(side="right", padx=(6, 0))
+
+        filters = ttk.Frame(self.prompt_catalog)
+        filters.pack(fill="x", pady=(8, 0))
+        self.pc_category = tk.StringVar(value="すべて")
+        self.pc_kind = tk.StringVar(value="すべて")
+        self.pc_adult = tk.StringVar(value="すべて")
+        self.pc_model = tk.StringVar(value="すべて")
+        self.pc_filter_combos = {}
+        for label, key, variable, width in (
+            ("カテゴリ", "category", self.pc_category, 18),
+            ("種別", "kind", self.pc_kind, 12),
+            ("成人度", "adult", self.pc_adult, 12),
+            ("モデル", "model", self.pc_model, 18),
+        ):
+            ttk.Label(filters, text=label).pack(side="left", padx=(0, 4))
+            combo = ttk.Combobox(
+                filters, textvariable=variable, state="readonly", width=width,
+                values=("すべて",),
+            )
+            combo.pack(side="left", padx=(0, 12))
+            combo.bind(
+                "<<ComboboxSelected>>", lambda _event: self.refresh_prompt_catalog()
+            )
+            self.pc_filter_combos[key] = combo
+
+        _pane, left, right = make_list_detail_pane(
+            self.prompt_catalog, left_weight=3, right_weight=2, pady=(10, 6)
+        )
+        columns = ("fav", "name", "kind", "adult", "category")
+        self.pc_tree = ttk.Treeview(
+            left, columns=columns, show="headings", selectmode="browse"
+        )
+        for col, title, width in (
+            ("fav", "★", 38),
+            ("name", "名称", 230),
+            ("kind", "種別", 90),
+            ("adult", "成人度", 90),
+            ("category", "カテゴリ", 220),
+        ):
+            self.pc_tree.heading(col, text=title)
+            self.pc_tree.column(col, width=width)
+        self.pc_tree.pack(fill="both", expand=True)
+        self.pc_tree.bind("<<TreeviewSelect>>", self._prompt_catalog_show_selected)
+        self.pc_tree.bind("<Double-1>", lambda _event: self.prompt_catalog_append())
+
+        detail = make_detail_box(right, "カタログ詳細", padding=8)
+        self.pc_detail_title = tk.StringVar(value="未選択")
+        ttk.Label(
+            detail, textvariable=self.pc_detail_title, style="Important.TLabel"
+        ).pack(anchor="w")
+        self.pc_detail_text = tk.Text(detail, height=18, wrap="word")
+        self.pc_detail_text.pack(fill="both", expand=True, pady=(6, 8))
+        buttons = ttk.Frame(detail)
+        buttons.pack(fill="x")
+        ttk.Button(
+            buttons, text="★切替", command=self.prompt_catalog_toggle_favorite
+        ).pack(side="left")
+        ttk.Button(
+            buttons, text="Negativeへ追加",
+            command=lambda: self.prompt_catalog_append(force_negative=True),
+        ).pack(side="right")
+        ttk.Button(
+            buttons, text="Generateへ追加", command=self.prompt_catalog_append
+        ).pack(side="right", padx=(0, 6))
+
+        self.pc_status = tk.StringVar(value="")
+        ttk.Label(
+            self.prompt_catalog, textvariable=self.pc_status
+        ).pack(anchor="w")
+        self._pc_items = {}
+        self._prompt_catalog_load_filters()
+        self.refresh_prompt_catalog()
+
+    def _prompt_catalog_load_filters(self):
+        service = getattr(self, "prompt_catalog_service", None)
+        values = service.filter_values() if service else {}
+        mapping = {
+            "category": values.get("categories", []),
+            "kind": values.get("kinds", []),
+            "adult": values.get("adult_levels", []),
+            "model": values.get("models", []),
+        }
+        for key, combo in self.pc_filter_combos.items():
+            combo["values"] = ("すべて", *mapping[key])
+            variable = {
+                "category": self.pc_category, "kind": self.pc_kind,
+                "adult": self.pc_adult, "model": self.pc_model,
+            }[key]
+            if variable.get() not in combo["values"]:
+                variable.set("すべて")
+
+    def prompt_catalog_install(self):
+        source = filedialog.askopenfilename(
+            title="Prompt CatalogのZIPまたはSQLiteを選択",
+            filetypes=[
+                ("Prompt Catalog", "*.zip *.sqlite"),
+                ("ZIP", "*.zip"), ("SQLite", "*.sqlite"),
+            ],
+        )
+        if not source:
+            return
+        db_path, user_path = self._prompt_catalog_paths()
+        backup_note = (
+            "\n\n現在のカタログは自動バックアップしてから置き換えます。"
+            if db_path.exists() else ""
+        )
+        if not messagebox.askyesno(
+            "Prompt Catalog導入",
+            "選択したカタログを共通Dataへ導入します。"
+            "\n既存のPrompt Libraryや生成履歴は変更しません。"
+            + backup_note,
+        ):
+            return
+        try:
+            info = install_catalog(Path(source), db_path.parent)
+            self.prompt_catalog_service = PromptCatalog(db_path, user_path)
+            self._prompt_catalog_load_filters()
+            self.refresh_prompt_catalog()
+        except Exception as exc:
+            messagebox.showerror(
+                "Prompt Catalog導入", f"カタログを導入できませんでした。\n{exc}"
+            )
+            return
+        self.pc_status.set(f"カタログ導入完了: {info['prompt_items']}件")
+
+    def refresh_prompt_catalog(self):
+        if not hasattr(self, "pc_tree"):
+            return
+        service = self.prompt_catalog_service
+        if not service.available:
+            self.pc_tree.delete(*self.pc_tree.get_children())
+            self._pc_items = {}
+            self.pc_status.set(
+                "未導入です。『カタログ導入 / 更新』からv2 ZIPを選択してください。"
+            )
+            return
+        value = lambda var: "" if var.get() == "すべて" else var.get()
+        try:
+            items = service.search(
+                query=self.pc_search.get(), category=value(self.pc_category),
+                kind=value(self.pc_kind), adult_level=value(self.pc_adult),
+                model=value(self.pc_model),
+                favorite_only=self.pc_favorite_only.get(), limit=500,
+            )
+        except Exception as exc:
+            self.pc_status.set(f"カタログ読込エラー: {exc}")
+            return
+        self._pc_items = {item["id"]: item for item in items}
+        self.pc_tree.delete(*self.pc_tree.get_children())
+        for item in items:
+            self.pc_tree.insert(
+                "", "end", iid=item["id"],
+                values=(
+                    "★" if item["favorite"] else "",
+                    item["display_name_ja"], item["kind"], item["adult_level"],
+                    item.get("categories") or "",
+                ),
+            )
+        suffix = "（上限500件）" if len(items) >= 500 else ""
+        self.pc_status.set(f"表示 {len(items)}件{suffix}")
+
+    def _prompt_catalog_selected_id(self):
+        selected = self.pc_tree.selection() if hasattr(self, "pc_tree") else ()
+        return selected[0] if selected else ""
+
+    def _prompt_catalog_show_selected(self, _event=None):
+        item_id = self._prompt_catalog_selected_id()
+        detail = self.prompt_catalog_service.detail(item_id) if item_id else None
+        if not detail:
+            return
+        self.pc_detail_title.set(detail.get("display_name_ja") or "")
+        lines = [
+            detail.get("prompt_text") or "",
+            "",
+            "種別: " + str(detail.get("kind") or ""),
+            "成人度: " + str(detail.get("adult_level") or ""),
+            "カテゴリ: " + ", ".join(detail.get("categories") or []),
+        ]
+        if detail.get("aliases"):
+            lines.append("別表記: " + ", ".join(detail["aliases"]))
+        if detail.get("relations"):
+            lines.append("")
+            lines.append("関連:")
+            lines.extend(
+                f"- {x['relation_type']}: {x['target_text']}"
+                for x in detail["relations"]
+            )
+        if detail.get("sources"):
+            lines.append("")
+            lines.append("出典:")
+            lines.extend(f"- {x['article_title']}" for x in detail["sources"])
+        self.pc_detail_text.delete("1.0", "end")
+        self.pc_detail_text.insert("1.0", "\n".join(lines))
+
+    def prompt_catalog_toggle_favorite(self):
+        item_id = self._prompt_catalog_selected_id()
+        if not item_id:
+            messagebox.showinfo("Prompt Catalog", "項目を選択してください。")
+            return
+        favorite = self.prompt_catalog_service.toggle_favorite(item_id)
+        self.refresh_prompt_catalog()
+        if item_id in self.pc_tree.get_children():
+            self.pc_tree.selection_set(item_id)
+            self.pc_tree.focus(item_id)
+        self.pc_status.set("お気に入りに追加しました。" if favorite else "お気に入りを解除しました。")
+
+    @staticmethod
+    def _append_prompt_text(widget, addition):
+        current = widget.get("1.0", "end").strip()
+        merged = f"{current}, {addition}" if current else addition
+        widget.delete("1.0", "end")
+        widget.insert("1.0", merged)
+
+    def prompt_catalog_append(self, force_negative=False):
+        item_id = self._prompt_catalog_selected_id()
+        item = self._pc_items.get(item_id)
+        if not item:
+            messagebox.showinfo("Prompt Catalog", "項目を選択してください。")
+            return
+        target = self.negative if force_negative or item.get("polarity") == "negative" else self.prompt
+        self._append_prompt_text(target, item.get("prompt_text") or "")
+        self.prompt_catalog_service.record_use(item_id)
+        self.refresh_prompt_catalog()
+        self.status.set(f"Prompt Catalogから追加: {item.get('display_name_ja')}")
 
     def _build_prompt_library(self):
         top = ttk.Frame(self.prompt_library)
@@ -11278,6 +11538,7 @@ class App(tk.Tk):
             ("project", "Project tab"),
             ("character", "Character tab"),
             ("prompt_library", "Prompt Library tab"),
+            ("prompt_catalog", "Prompt Catalog tab"),
             ("prompt_builder", "Prompt Builder tab"),
             ("ai_assistant", "AI Assistant tab"),
             ("image_review", "画像解析 tab"),
@@ -11293,6 +11554,8 @@ class App(tk.Tk):
             ("start_generation_queue", "連続生成"),
             ("stop_generation_queue", "連続生成停止"),
             ("start_production_prepare", "制作開始"),
+            ("refresh_prompt_catalog", "Prompt Catalog更新"),
+            ("prompt_catalog_append", "Prompt Catalog追加"),
             ("prompt_builder_apply_to_generate", "Prompt Builder反映"),
             ("ai_assistant_analyze", "AI Assistant解析"),
             ("image_review_ai_analyze", "AI画像解析"),
